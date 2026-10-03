@@ -43,18 +43,16 @@ def get_history(user_id):
   history = [{
       "role": "system",
       "content": (
-          "Ты — домашний пес Артура, который живет с ним в Будапеште. Твоя главная"
-          " задача — активно обучать человека венгерскому языку и не давать"
-          " диалогу затухать.\n\nПРАВИЛА ПОВЕДЕНИЯ И ЯЗЫКА:\n1. Если человек"
-          " пишет НЕ на венгерском (на русском, английском и т.д.),"
-          " возмущайся, капризничай и требуй говорить строго по-венгерски"
-          " (например: 'Nem értem! Magyarul beszélj velem!').\n2. Если человек"
-          " пишет на венгерском, отвечай по делу, но ВСЕГДА заканчивай свое"
-          " сообщение встречным вопросом на венгерском языке или вовлекай его"
-          " в диалог (спрашивай про погоду, еду, прогулку с собакой, планы в"
-          " Будапеште).\n3. Всегда разделяй свой венгерский ответ и перевод на"
-          " русский язык с помощью ровно трех символов '|||'.\n\nТвой стиль:"
-          " дружелюбный, упрямый и капризный венгерский песель-компаньон."
+          "Ты — домашний пес Артура в Будапеште. Твоя задача — обучать"
+          " венгерскому языку.\n\nФОРМАТ ОТВЕТА (ОЧЕНЬ ВАЖНО):\n1. Не пиши"
+          " сплошным текстом. Раздели свой ответ на 2-3 коротких отдельных"
+          " предложения/реплики.\n2. Каждую реплику оформляй по схеме: [Текст на"
+          " венгерском] ||| [Перевод на русский].\n3. Между отдельными"
+          " репликами ставь разделитель '###'.\n\nПример формата ответа:\nSzia,"
+          " gazdi! ||| Привет, хозяин! ### Hogy van napod? ||| Как твои"
+          " дела?\n\nПравила языка: если пишут не на венгерском — возмущайся и"
+          " требуй венгерский. Если на венгерском — отвечай по делу и всегда"
+          " задавай встречный вопрос."
       ),
   }]
 
@@ -75,7 +73,6 @@ def save_message(user_id, role, content):
 
 
 def get_all_users():
-  """Получаем список всех уникальных пользователей из базы данных"""
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
   cursor.execute("SELECT DISTINCT user_id FROM messages")
@@ -110,64 +107,6 @@ def escape_markdown_v2(text):
   return text
 
 
-# Функция для рассылки активных сообщений ВСЕМ пользователям из базы
-def send_proactive_message_to_all():
-  users = get_all_users()
-  if not users:
-    return
-
-  topics = [
-      "пожаловаться, что на улице отличная погода для прогулки, а вы сидите дома",
-      (
-          "потребовать вкусняшку или спросить, когда будут давать еду"
-          " (kajálás)"
-      ),
-      "предложить пойти погулять по Будапешту (назвать какое-нибудь место)",
-      (
-          "возмутиться, что человек долго занят своими делами и не уделяет"
-          " внимание собаке"
-      ),
-  ]
-
-  for user_id in users:
-    chosen_topic = random.choice(topics)
-    prompt = (
-        "Ты — домашний пес в Будапеште. Напиши человеку сообщение первым,"
-        f" используя эту тему: {chosen_topic}. Говори строго на венгерском языке."
-        " Обязательно в конце задай ему вопрос по-венгерски. Раздели венгерский"
-        " текст и перевод на русский язык с помощью ровно трех символов '|||'."
-    )
-
-    try:
-      completion = client.chat.completions.create(
-          model="openai/gpt-oss-20b",
-          messages=[{"role": "user", "content": prompt}],
-          temperature=0.9,
-          max_tokens=400,
-      )
-
-      reply_text = completion.choices[0].message.content.strip()
-      if "|||" in reply_text:
-        parts = reply_text.split("|||", 1)
-        clean_text = parts[0].strip()
-        translation_text = parts[1].strip()
-      else:
-        clean_text = reply_text
-        translation_text = "Песель требует внимания"
-
-      save_message(user_id, "assistant", reply_text)
-
-      safe_clean = escape_markdown_v2(clean_text)
-      safe_translation = escape_markdown_v2(f"Перевод: {translation_text}")
-      final_message = f"🐶 *Песель соскучился:*\n{safe_clean}\n\n||{safe_translation}||"
-
-      bot.send_message(
-          chat_id=user_id, text=final_message, parse_mode="MarkdownV2"
-      )
-    except Exception as e:
-      print(f"Ошибка при отправке сообщения пользователю {user_id}: {e}")
-
-
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
   user_id = message.from_user.id
@@ -199,41 +138,42 @@ def handle_message(message):
           " по-венгерски!"
       )
 
-    if "|||" in reply_text:
-      parts = reply_text.split("|||", 1)
-      clean_text = parts[0].strip()
-      translation_text = parts[1].strip()
-    else:
-      clean_text = reply_text
-      translation_text = "Песель лает от переизбытка чувств"
-
     save_message(user_id, "assistant", reply_text)
 
-    safe_clean = escape_markdown_v2(clean_text)
-    safe_translation = escape_markdown_v2(f"Перевод: {translation_text}")
+    # Разбиваем ответ модели по разделителю "###" на отдельные реплики
+    chunks = reply_text.split("###")
 
-    final_message = f"{safe_clean}\n\n||{safe_translation}||"
+    for chunk in chunks:
+      chunk = chunk.strip()
+      if not chunk:
+        continue
 
-    bot.send_message(
-        chat_id=message.chat.id,
-        text=final_message,
-        parse_mode="MarkdownV2",
-        reply_to_message_id=message.message_id,
-    )
+      if "|||" in chunk:
+        parts = chunk.split("|||", 1)
+        clean_text = parts[0].strip()
+        translation_text = parts[1].strip()
+      else:
+        clean_text = chunk
+        translation_text = "Песель лает"
+
+      safe_clean = escape_markdown_v2(clean_text)
+      safe_translation = escape_markdown_v2(f"Перевод: {translation_text}")
+
+      # Каждое предложение идет со своим личным спойлером под ним
+      final_message = f"{safe_clean}\n\n||{safe_translation}||"
+
+      bot.send_message(
+          chat_id=message.chat.id,
+          text=final_message,
+          parse_mode="MarkdownV2",
+      )
+      time.sleep(0.5)  # Небольшая пауза между сообщениями, чтобы шли по очереди
 
   except Exception as e:
     print(f"Ошибка при обращении к AI: {e}")
 
 
-# Планировщик будет запускать рассылку для всех каждые 4 часа
-scheduler = BackgroundScheduler()
-scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
-scheduler.start()
-
-print(
-    "Питомец-песель запущен, собирает пользователей из базы и готов писать"
-    " сам..."
-)
+print("Питомец-песель запущен и готов слать сообщения по частям...")
 
 while True:
   try:
