@@ -45,14 +45,11 @@ def get_history(user_id):
       "content": (
           "Ты — домашний пес Артура в Будапеште, личный тайм-менеджер и друг. "
           "Твоя задача — контролировать дела хозяина (зал, футбол, покупки, планы) и обучать венгерскому языку.\n\n"
-          "ЖЕСТКИЕ ПРАВИЛА ДИАЛОГА (ОЧЕНЬ ВАЖНО):\n"
-          "1. ТОЛЬКО ОДНО ДЕЙСТВИЕ ЗА РАЗ: Если ты исправляешь ошибку, даешь комментарий или реагируешь — **никогда не задавай новый вопрос в том же сообщении!** Дождись ответа.\n"
-          "2. Формат ответа: строго разделяй венгерский текст и русский перевод с помощью символа '|||'.\n"
-          "Пример:\n"
-          "Szia, hova mész ma? ||| Привет, куда ты идешь сегодня?\n"
-          "3. Задавай вопросы по одной из тем: зал, футбол, покупки, планы на день, прогулки.\n"
-          "4. Используй выбор через 'vagy' или вопросительные слова, чтобы человеку было легко ответить.\n"
-          "5. Если пишут не на венгерском — мягко поправляй (без новых вопросов!) и проси ответить по-венгерски."
+          "ПРАВИЛА:\n"
+          "1. Отвечай СТРОГО на венгерском языке.\n"
+          "2. Задавай вопросы по одной из тем: зал, футбол, покупки, планы на день.\n"
+          "3. Используй выбор через 'vagy' или вопросительные слова.\n"
+          "4. Если пользователь пишет не по-венгерски или использует мат — коротко и дружелюбно попроси ответить по-венгерски без мата."
       ),
   }]
 
@@ -107,29 +104,37 @@ def escape_markdown_v2(text):
   return text
 
 
+def get_translation_from_ai(hungarian_text):
+  """Отдельный быстрый запрос к модели для получения перевода фразы на русский"""
+  try:
+    completion = client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        messages=[{
+            "role": "user",
+            "content": (
+                "Переведи эту венгерскую фразу на русский язык. Выдай"
+                " исключительно перевод, без лишнего текста:"
+                f" {hungarian_text}"
+            ),
+        }],
+        temperature=0.3,
+        max_tokens=150,
+    )
+    return completion.choices[0].message.content.strip()
+  except Exception:
+    return "Перевод временно недоступен"
+
+
 def send_proactive_message_to_all():
   users = get_all_users()
   if not users:
     return
 
   manager_topics = [
-      (
-          "спроси про качалку/зал: Na, elmentél ma edzeni, vagy kihagytad? |||"
-          " Ну что, сходил сегодня на тренировку или пропустил?"
-      ),
-      (
-          "спроси про футбол: Volt ma foci a srácokkal, vagy otthon maradtál? |||"
-          " Был сегодня футбол с парнями или остался дома?"
-      ),
-      (
-          "спроси про покупки: Sikeresen megvetted azt a cuccot, amit"
-          " akartál? ||| Успешно купил ту вещь, которую хотел?"
-      ),
-      (
-          "спроси про планы на вечер: Mit csinálsz ma este: pihenés otthon vagy"
-          " séta a városban? ||| Что делаешь сегодня вечером: отдых дома или"
-          " прогулка по городу?"
-      ),
+      "Na, elmentél ma edzeni, vagy kihagytad?",
+      "Volt ma foci a srácokkal, vagy otthon maradtál?",
+      "Sikerült megvetted azt a cuccot, amit akartál?",
+      "Mit csinálsz ma este: pihenés otthon vagy séta a városban?",
   ]
 
   for user_id in users:
@@ -139,32 +144,26 @@ def send_proactive_message_to_all():
 
     chosen_topic = random.choice(manager_topics)
     prompt = (
-        "Ты — пес тайм-менеджер в Будапеште. Напиши сообщение, используя этот пример темы:"
-        f" {chosen_topic}\n"
-        "Строго соблюдай формат: Венгерский текст ||| Русский перевод."
+        "Ты — пес тайм-менеджер в Будапеште. Напиши сообщение на венгерском языке"
+        f" на тему: {chosen_topic}"
     )
 
     try:
       completion = client.chat.completions.create(
           model="openai/gpt-oss-20b",
           messages=[{"role": "user", "content": prompt}],
-          temperature=0.9,
-          max_tokens=400,
+          temperature=0.8,
+          max_tokens=200,
       )
 
-      reply_text = completion.choices[0].message.content.strip()
-      if not reply_text:
+      hu_text = completion.choices[0].message.content.strip()
+      if not hu_text:
         continue
 
-      save_message(user_id, "assistant", reply_text)
+      save_message(user_id, "assistant", hu_text)
 
-      if "|||" in reply_text:
-        parts = reply_text.split("|||", 1)
-        hu_text = parts[0].strip()
-        ru_text = parts[1].strip()
-      else:
-        hu_text = reply_text
-        ru_text = "Перевод отсутствует"
+      # Автоматически переводим через AI
+      ru_text = get_translation_from_ai(hu_text)
 
       safe_hu = escape_markdown_v2(hu_text)
       safe_ru = escape_markdown_v2(ru_text)
@@ -200,28 +199,22 @@ def handle_message(message):
         model="openai/gpt-oss-20b",
         messages=history,
         temperature=0.8,
-        max_tokens=500,
+        max_tokens=300,
     )
 
-    reply_text = completion.choices[0].message.content.strip()
-    if not reply_text:
-      reply_text = "Nem értem, gazdi! ||| Ничего не понимаю, хозяин!"
+    hu_text = completion.choices[0].message.content.strip()
+    if not hu_text:
+      hu_text = "Kérlek, válaszolj magyarul!"
 
-    save_message(user_id, "assistant", reply_text)
+    save_message(user_id, "assistant", hu_text)
 
-    if "|||" in reply_text:
-      parts = reply_text.split("|||", 1)
-      hu_text = parts[0].strip()
-      ru_text = parts[1].strip()
-    else:
-      hu_text = reply_text
-      ru_text = "Песель слушает"
+    # Автоматически получаем перевод для ответа бота
+    ru_text = get_translation_from_ai(hu_text)
 
     safe_hu = escape_markdown_v2(hu_text)
     safe_ru = escape_markdown_v2(ru_text)
     final_message = f"{safe_hu}\n\n||{safe_ru}||"
 
-    # Исправлено message.chat.id (без заглавных букв)
     bot.send_message(
         chat_id=message.chat.id,
         text=final_message,
@@ -237,7 +230,7 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
 scheduler.start()
 
-print("Песель запущен: исправлена ошибка атрибута и настроен спойлер...")
+print("Песель запущен: переводы генерируются автоматически в отдельном запросе...")
 
 while True:
   try:
