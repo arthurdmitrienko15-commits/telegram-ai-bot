@@ -1,34 +1,46 @@
-import telebot
-from google import genai
-import time
 import os
+import sqlite3
+import telebot
+from groq import Groq
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8926102288:AAGfDPfbXE0j1kycZCB_Zd_USDpsu5v17wY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyBtFftYldCrnsuoYIAmh-uAgnEZd44Q_0g")
+# Читаем ключи из переменных окружения (Railway / .env)
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = Groq(api_key=GROQ_API_KEY)
+
+
+def init_db():
+  conn = sqlite3.connect("bot_messages.db")
+  cursor = conn.cursor()
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER,
+            role TEXT,
+            content TEXT
+        )
+    """)
+  conn.commit()
+  conn.close()
+
+
+init_db()
+
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
-    for attempt in range(10):
-        try:
-            response = client.models.generate_content(
-                model="gemini-3.5-flash",
-                contents=message.text,
-            )
-            bot.reply_to(message, response.text)
-            return
-        except Exception as e:
-            if "503" in str(e) and attempt < 9:
-                time.sleep(2)
-                continue
-            elif "429" in str(e) and attempt < 9:
-                time.sleep(5)
-                continue
-            else:
-                bot.reply_to(message, f"Ошибка: {e}")
-                break
+  try:
+    # Пример вызова Groq API
+    completion = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": message.text}],
+    )
+    bot.reply_to(message, completion.choices[0].message.content)
+  except Exception as e:
+    bot.reply_to(message, f"Ошибка: {e}")
 
-print("Бот успешно запущен в облаке...")
-bot.infinity_polling()
+
+if __name__ == "__main__":
+  print("Бот запущен...")
+  bot.infinity_polling()
