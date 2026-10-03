@@ -77,11 +77,10 @@ def get_all_users():
 
 
 def add_spoilers_via_ai(hungarian_text):
-  """Заставляет модель выдавать перевод в HTML-тегах спойлера"""
+  """Заставляет модель выдавать перевод в HTML-тегах спойлера с защитой от пустоты"""
   try:
     prompt = (
-        "У тебя есть предложение на венгерском языке: "
-        f'"{hungarian_text}"\n\n'
+        f'У тебя есть предложение на венгерском языке: "{hungarian_text}"\n\n'
         "Перепиши это предложение так, чтобы после каждого слова/значимого элемента "
         "был добавлен перевод на русский язык в HTML-теге спойлера в формате: слово перевод.\n"
         "Сохраняй знаки препинания после тегов.\n"
@@ -94,7 +93,9 @@ def add_spoilers_via_ai(hungarian_text):
         temperature=0.3,
         max_tokens=400,
     )
-    return completion.choices[0].message.content.strip()
+    res = completion.choices[0].message.content.strip()
+    # Если модель вернула пустоту, отдаем исходный текст
+    return res if res else hungarian_text
   except Exception as e:
     print(f"Ошибка перевода со спойлерами: {e}")
     return hungarian_text
@@ -139,10 +140,10 @@ def send_proactive_message_to_all():
       save_message(user_id, "assistant", hu_text)
       final_message = add_spoilers_via_ai(hu_text)
 
-      # Отправляем с parse_mode='HTML'
-      bot.send_message(
-          chat_id=user_id, text=final_message, parse_mode="HTML"
-      )
+      if final_message:
+        bot.send_message(
+            chat_id=user_id, text=final_message, parse_mode="HTML"
+        )
       time.sleep(0.5)
 
     except Exception as e:
@@ -182,9 +183,10 @@ def handle_message(message):
     # Генерируем спойлеры для каждого слова через HTML-теги
     final_message = add_spoilers_via_ai(hu_text)
 
-    bot.send_message(
-        chat_id=message.chat.id, text=final_message, parse_mode="HTML"
-    )
+    if final_message:
+      bot.send_message(
+          chat_id=message.chat.id, text=final_message, parse_mode="HTML"
+      )
     time.sleep(0.5)
 
   except Exception as e:
@@ -195,7 +197,7 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
 scheduler.start()
 
-print("Песель запущен: HTML-спойлеры после каждого слова активированы...")
+print("Песель запущен: HTML-спойлеры и защиты активированы...")
 
 while True:
   try:
