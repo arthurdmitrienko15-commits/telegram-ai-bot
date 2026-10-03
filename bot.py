@@ -45,13 +45,14 @@ def get_history(user_id):
       "content": (
           "Ты — домашний пес Артура в Будапеште, личный тайм-менеджер и друг. "
           "Твоя задача — контролировать дела хозяина (зал, футбол, покупки, планы) и обучать венгерскому языку.\n\n"
-          "ЖЕСТКИЕ ПРАВИЛА ДИАЛОГА (ОЧЕНЬ ВАЖНО):\n"
-          "1. ТОЛЬКО ОДНО ДЕЙСТВИЕ ЗА РАЗ: Если ты исправляешь ошибку пользователя, даешь перевод или реагируешь на его фразу — **никогда не задавай новый вопрос в том же сообщении!** Дождись его ответа.\n"
-          "2. Новый вопрос задавай только тогда, когда пользователь ответил на предыдущий.\n"
-          "3. Чередуй темы (зал, футбол, покупка вещей, планы на день, прогулки), не повторяй один и тот же шаблон вопроса.\n"
-          "4. Делай вопросы удобными: используй выбор через 'vagy' или вопросительные слова (hol, mikor, hova, mit), чтобы человеку было легко ответить.\n"
-          "5. Формат ответа: строго [Текст на венгерском] ||| [Перевод на русский]. Если реплика одна, символ '###' не нужен.\n"
-          "6. Если пишут не на венгерском — мягко поправляй (без новых вопросов!) и проси ответить по-венгерски."
+          "ПРАВИЛА ФОРМАТИРОВАНИЯ И ДИАЛОГА (ОЧЕНЬ ВАЖНО):\n"
+          "1. ТОЛЬКО ОДНО ДЕЙСТВИЕ ЗА РАЗ: Если ты исправляешь ошибку, даешь комментарий или реагируешь — **никогда не задавай новый вопрос в том же сообщении!** Дождись ответа.\n"
+          "2. Форматируй ответ так, чтобы каждое венгерское слово или короткая фраза шла в паре с переводом в формате: Слово (||перевод||).\n"
+          "Пример:\n"
+          "Szia (||Привет||), hova (||куда||) mész (||идешь||) ma (||сегодня||)?\n"
+          "3. Задавай вопросы по одному из тем: зал, футбол, покупки, планы на день, прогулки.\n"
+          "4. Используй выбор через 'vagy' или вопросительные слова, чтобы человеку было легко ответить.\n"
+          "5. Если пишут не на венгерском — мягко поправляй (без новых вопросов!) и проси ответить по-венгерски."
       ),
   }]
 
@@ -113,25 +114,20 @@ def send_proactive_message_to_all():
 
   manager_topics = [
       (
-          "спроси про качалку/зал: 'Na, elmentél ma edzeni, vagy kihagytad?'"
-          " (Ну что, сходил сегодня на тренировку или пропустил?)"
+          "спроси про качалку/зал: Szia, elmentél (||Привет, сходил||) ma"
+          " (||сегодня||) edzeni (||в зал||) vagy (||или||) nem (||нет||)?"
       ),
       (
-          "спроси про футбол: 'Volt ma foci a srácokkal, vagy otthon maradtál?'"
-          " (Был сегодня футбол с парнями или остался дома?)"
+          "спроси про футбол: Volt (||Был||) ma (||сегодня||) foci"
+          " (||футбол||) a (||с||) srácokkal (||парнями||)?"
       ),
       (
-          "спроси про покупки на Vinted/в магазине: 'Sikeresen megvetted azt a"
-          " cuccot, amit akartál?' (Успешно купил ту вещь, которую хотел?)"
+          "спроси про покупки: Sikeresen (||Успешно||) megvetted (||купил||) azt"
+          " (||ту||) a (||вещь||) cuccot (||вещь||)?"
       ),
       (
-          "спроси про планы на вечер: 'Mit csinálsz ma este: pihenés otthon"
-          " vagy séta a városban?' (Что делаешь сегодня вечером: отдых дома"
-          " или прогулка по городу?)"
-      ),
-      (
-          "спроси про дела по дому: 'Sikerült elintézned mindent, amit"
-          " terveztél mára?' (Успел уладить всё, что планировал на сегодня?)"
+          "спроси про планы на вечер: Mit (||Что||) csinálsz (||делаешь||) ma"
+          " (||сегодня||) este (||вечером||)?"
       ),
   ]
 
@@ -142,10 +138,9 @@ def send_proactive_message_to_all():
 
     chosen_topic = random.choice(manager_topics)
     prompt = (
-        "Ты — пес тайм-менеджер в Будапеште. Напиши человеку сообщение первым,"
-        f" используя эту тему: {chosen_topic}.\n"
-        "Задай только ОДИН вопрос, не засыпай его кучей тем.\n"
-        "Соблюдай формат: [Текст на венгерском] ||| [Перевод на русский]."
+        "Ты — пес тайм-менеджер в Будапеште. Напиши сообщение, используя этот пример формата:"
+        f" {chosen_topic}\n"
+        "Строго соблюдай формат: каждое слово или пара идет вместе с переводом под спойлером в скобках, например: Слово (||перевод||)."
     )
 
     try:
@@ -162,30 +157,13 @@ def send_proactive_message_to_all():
 
       save_message(user_id, "assistant", reply_text)
 
-      chunks = reply_text.split("###")
-      for chunk in chunks:
-        chunk = chunk.strip()
-        if not chunk:
-          continue
+      safe_text = escape_markdown_v2(reply_text)
+      final_message = f"🐶 *Песель-менеджер:*\n{safe_text}"
 
-        if "|||" in chunk:
-          parts = chunk.split("|||", 1)
-          clean_text = parts[0].strip()
-          translation_text = parts[1].strip()
-        else:
-          clean_text = chunk
-          translation_text = "Песель проверяет дела"
-
-        safe_clean = escape_markdown_v2(clean_text)
-        safe_translation = escape_markdown_v2(f"Перевод: {translation_text}")
-        final_message = (
-            f"🐶 *Песель-менеджер интересуется:*\n{safe_clean}\n\n||{safe_translation}||"
-        )
-
-        bot.send_message(
-            chat_id=user_id, text=final_message, parse_mode="MarkdownV2"
-        )
-        time.sleep(0.5)
+      bot.send_message(
+          chat_id=user_id, text=final_message, parse_mode="MarkdownV2"
+      )
+      time.sleep(0.5)
 
     except Exception as e:
       print(f"Ошибка при отправке активного сообщения пользователю {user_id}: {e}")
@@ -217,39 +195,19 @@ def handle_message(message):
 
     reply_text = completion.choices[0].message.content.strip()
     if not reply_text:
-      reply_text = (
-          "Nem értem, gazdi! Csak magyarul! ||| Ничего не понимаю! Только"
-          " по-венгерски!"
-      )
+      reply_text = "Nem (||Нет||) értem (||понимаю||), gazdi (||хозяин||)!"
 
     save_message(user_id, "assistant", reply_text)
 
-    chunks = reply_text.split("###")
+    safe_text = escape_markdown_v2(reply_text)
+    final_message = safe_text
 
-    for chunk in chunks:
-      chunk = chunk.strip()
-      if not chunk:
-        continue
-
-      if "|||" in chunk:
-        parts = chunk.split("|||", 1)
-        clean_text = parts[0].strip()
-        translation_text = parts[1].strip()
-      else:
-        clean_text = chunk
-        translation_text = "Песель слушает"
-
-      safe_clean = escape_markdown_v2(clean_text)
-      safe_translation = escape_markdown_v2(f"Перевод: {translation_text}")
-
-      final_message = f"{safe_clean}\n\n||{safe_translation}||"
-
-      bot.send_message(
-          chat_id=message.chat.id,
-          text=final_message,
-          parse_mode="MarkdownV2",
-      )
-      time.sleep(0.5)
+    bot.send_message(
+        chat_id=message.chat.id,
+        text=final_message,
+        parse_mode="MarkdownV2",
+    )
+    time.sleep(0.5)
 
   except Exception as e:
     print(f"Ошибка при обращении к AI: {e}")
@@ -259,7 +217,7 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
 scheduler.start()
 
-print("Песель-тайм-менеджер обновлен: логика диалога по шагам исправлена...")
+print("Песель настроен на пословные спойлеры...")
 
 while True:
   try:
