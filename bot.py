@@ -1,6 +1,8 @@
 import os
+import random
 import sqlite3
 import time
+from apscheduler.schedulers.background import BackgroundScheduler
 import telebot
 from groq import Groq
 
@@ -73,6 +75,16 @@ def save_message(user_id, role, content):
   conn.close()
 
 
+def get_all_users():
+  """Получаем список всех уникальных пользователей из базы данных"""
+  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
+  cursor = conn.cursor()
+  cursor.execute("SELECT DISTINCT user_id FROM messages")
+  rows = cursor.fetchall()
+  conn.close()
+  return [row[0] for row in rows]
+
+
 def escape_markdown_v2(text):
   special_chars = [
       "_",
@@ -97,6 +109,82 @@ def escape_markdown_v2(text):
   for char in special_chars:
     text = text.replace(char, f"\\{char}")
   return text
+
+
+# Функция для проактивной рассылки сообщений всем пользователям из базы
+def send_proactive_message_to_all():
+  users = get_all_users()
+  if not users:
+    return
+
+  topics = [
+      "пожаловаться, что на улице отличная погода для прогулки по Будапешту, а вы сидите дома",
+      (
+          "потребовать вкусняшку или спросить, когда будут давать еду"
+          " (kajálás)"
+      ),
+      "предложить сбегать на прогулку в парк или к Дунаю",
+      (
+          "возмутиться, что человек долго занят своими делами и совсем не"
+          " уделяет внимание собаке"
+      ),
+  ]
+
+  for user_id in users:
+    # Проверяем, что у пользователя уже есть история диалога
+    history = get_history(user_id)
+    if len(history) <= 1:
+      continue
+
+    chosen_topic = random.choice(topics)
+    prompt = (
+        "Ты — домашний пес в Будапеште. Напиши человеку сообщение первым,"
+        f" используя эту тему: {chosen_topic}.\n"
+        "Соблюдай формат: от 1 до 4 реплик, каждая оформлена как [Текст на венгерском] ||| [Перевод на русский],"
+        " разделенных символом '###' на отдельной строке. Говори строго по-венгерски."
+    )
+
+    try:
+      completion = client.chat.completions.create(
+          model="openai/gpt-oss-20b",
+          messages=[{"role": "user", "content": prompt}],
+          temperature=0.9,
+          max_tokens=600,
+      )
+
+      reply_text = completion.choices[0].message.content.strip()
+      if not reply_text:
+        continue
+
+      save_message(user_id, "assistant", reply_text)
+
+      chunks = reply_text.split("###")
+      for chunk in chunks:
+        chunk = chunk.strip()
+        if not chunk:
+          continue
+
+        if "|||" in chunk:
+          parts = chunk.split("|||", 1)
+          clean_text = parts[0].strip()
+          translation_text = parts[1].strip()
+        else:
+          clean_text = chunk
+          translation_text = "Песель соскучился"
+
+        safe_clean = escape_markdown_v2(clean_text)
+        safe_translation = escape_markdown_v2(f"Перевод: {translation_text}")
+        final_message = (
+            f"🐶 *Песель напоминает о себе:*\n{safe_clean}\n\n||{safe_translation}||"
+        )
+
+        bot.send_message(
+            chat_id=user_id, text=final_message, parse_mode="MarkdownV2"
+        )
+        time.sleep(0.5)
+
+    except Exception as e:
+      print(f"Ошибка при отправке активного сообщения пользователю {user_id}: {e}")
 
 
 @bot.message_handler(func=lambda message: True)
@@ -132,7 +220,6 @@ def handle_message(message):
 
     save_message(user_id, "assistant", reply_text)
 
-    # Разбиваем ответ модели по разделителю "###" на отдельные реплики
     chunks = reply_text.split("###")
 
     for chunk in chunks:
@@ -151,7 +238,6 @@ def handle_message(message):
       safe_clean = escape_markdown_v2(clean_text)
       safe_translation = escape_markdown_v2(f"Перевод: {translation_text}")
 
-      # Каждое предложение идет со своим личным спойлером под ним
       final_message = f"{safe_clean}\n\n||{safe_translation}||"
 
       bot.send_message(
@@ -159,13 +245,18 @@ def handle_message(message):
           text=final_message,
           parse_mode="MarkdownV2",
       )
-      time.sleep(0.5)  # Небольшая пауза между сообщениями, чтобы шли по очереди
+      time.sleep(0.5)
 
   except Exception as e:
     print(f"Ошибка при обращении к AI: {e}")
 
 
-print("Питомец-песель запущен и готов к работе...")
+# Настраиваем планировщик: пес будет писать первым всем пользователям каждые 4 часа
+scheduler = BackgroundScheduler()
+scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
+scheduler.start()
+
+print("Питомец-песель запущен, следит за базой и готов писать первым...")
 
 while True:
   try:
