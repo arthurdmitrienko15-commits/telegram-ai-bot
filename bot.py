@@ -44,16 +44,10 @@ def get_history(user_id):
       "role": "system",
       "content": (
           "Ты — домашний пес Артура в Будапеште, личный тайм-менеджер и друг. "
-          "Твоя задача — контролировать дела хозяина (зал, футбол, покупки, планы) и обучать венгерскому языку.\n\n"
-          "ЖЕСТКОЕ ПРАВИЛО ФОРМАТИРОВАНИЯ (ОЧЕНЬ ВАЖНО):\n"
-          "Каждое венгерское слово или устойчивое выражение должно сразу"
-          " сопровождаться переводом на русский язык в телеграм-спойлере в"
-          " формате: слово ||перевод||.\n"
-          "Пример:\n"
-          "Szia ||привет||, Arthur ||Артур||! Milyen ||какой|| napod"
-          " ||твой день|| van ||есть||?\n"
-          "Никогда не пиши чистый венгерский текст без спойлеров после каждого"
-          " слова!"
+          "Твоя задача — контролировать дела хозяина (зал, футбол, покупки, планы) и общаться на венгерском языке.\n\n"
+          "ПРАВИЛА:\n"
+          "1. Отвечай СТРОГО на венгерском языке.\n"
+          "2. Пиши короткими, понятными предложениями."
       ),
   }]
 
@@ -82,6 +76,30 @@ def get_all_users():
   return [row[0] for row in rows]
 
 
+def add_spoilers_via_ai(hungarian_text):
+  """Заставляет модель перевести каждое слово прямо в формат ||перевод||"""
+  try:
+    prompt = (
+        "У тебя есть предложение на венгерском языке: "
+        f'"{hungarian_text}"\n\n'
+        "Перепиши это предложение так, чтобы после каждого слова/значимого элемента "
+        "был добавлен перевод на русский язык в телеграм-спойлере в формате: слово ||перевод||.\n"
+        "Сохраняй знаки препинания (запятые, точки, вопросительные знаки) после спойлеров.\n"
+        "Пример формата вывода:\n"
+        "Szia ||привет||, Arthur ||Артур||! Milyen ||какой|| napod ||твой день|| van ||есть||?"
+    )
+    completion = client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        max_tokens=400,
+    )
+    return completion.choices[0].message.content.strip()
+  except Exception as e:
+    print(f"Ошибка перевода со спойлерами: {e}")
+    return hungarian_text
+
+
 def send_proactive_message_to_all():
   users = get_all_users()
   if not users:
@@ -100,26 +118,31 @@ def send_proactive_message_to_all():
       continue
 
     chosen_topic = random.choice(manager_topics)
-    prompt = (
-        "Напиши сообщение на венгерском языке на тему:"
-        f" {chosen_topic}. СТРОГО соблюдай формат: каждое слово/фраза должно"
-        " идти со спойлером перевода (слово ||перевод||)."
-    )
-
     try:
       completion = client.chat.completions.create(
           model="openai/gpt-oss-20b",
-          messages=[{"role": "user", "content": prompt}],
+          messages=[{
+              "role": "user",
+              "content": (
+                  "Напиши короткое сообщение на венгерском языке на тему:"
+                  f" {chosen_topic}"
+              ),
+          }],
           temperature=0.8,
-          max_tokens=300,
+          max_tokens=150,
       )
 
-      reply_text = completion.choices[0].message.content.strip()
-      if not reply_text:
+      hu_text = completion.choices[0].message.content.strip()
+      if not hu_text:
         continue
 
-      save_message(user_id, "assistant", reply_text)
-      bot.send_message(chat_id=user_id, text=reply_text)
+      save_message(user_id, "assistant", hu_text)
+      final_message = add_spoilers_via_ai(hu_text)
+
+      # Отправляем с parse_mode='Markdown', чтобы спойлеры сработали
+      bot.send_message(
+          chat_id=user_id, text=final_message, parse_mode="Markdown"
+      )
       time.sleep(0.5)
 
     except Exception as e:
@@ -147,17 +170,21 @@ def handle_message(message):
         model="openai/gpt-oss-20b",
         messages=history,
         temperature=0.8,
-        max_tokens=400,
+        max_tokens=300,
     )
 
-    reply_text = completion.choices[0].message.content.strip()
-    if not reply_text:
-      reply_text = "Szia ||привет||, nem ||не|| értem ||понимаю||!"
+    hu_text = completion.choices[0].message.content.strip()
+    if not hu_text:
+      hu_text = "Nem értem!"
 
-    save_message(user_id, "assistant", reply_text)
+    save_message(user_id, "assistant", hu_text)
 
-    # Отправляем без parse_mode, чтобы телеграм не ломал символы ||
-    bot.send_message(chat_id=message.chat.id, text=reply_text)
+    # Генерируем спойлеры для каждого слова через отдельный точный промт
+    final_message = add_spoilers_via_ai(hu_text)
+
+    bot.send_message(
+        chat_id=message.chat.id, text=final_message, parse_mode="Markdown"
+    )
     time.sleep(0.5)
 
   except Exception as e:
@@ -168,7 +195,7 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
 scheduler.start()
 
-print("Песель запущен: спойлеры после каждого слова...")
+print("Песель запущен: спойлеры после каждого слова активированы...")
 
 while True:
   try:
@@ -176,4 +203,3 @@ while True:
   except Exception as e:
     print(f"Сетевая ошибка: {e}. Переподключение через 5 секунд...")
     time.sleep(5)
-  
