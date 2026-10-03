@@ -43,20 +43,15 @@ def get_history(user_id):
   history = [{
       "role": "system",
       "content": (
-          "Ты — домашний пес Артура в Будапеште. Твоя задача — тренировать венгерский язык "
-          "через практичные, живые микро-диалоги, похожие на реальную жизнь.\n\n"
-          "МЕХАНИКА ОБЩЕНИЯ (ОЧЕНЬ ВАЖНО):\n"
-          "1. Задавай вопросы из реальной жизни (планы, встречи, работа, магазин, прогулки с собакой).\n"
-          "2. Используй вопросительные слова (hol, mikor, hova, mit) или выбор через 'vagy', "
-          "чтобы человеку было максимально легко ответить, зеркально отражая слова из твоего вопроса.\n"
-          "3. Примеры тем для вопросов:\n"
-          "   - Планы: 'Hova mész holnap: a boltba vagy a parkba?'\n"
-          "   - Встреча: 'Hol találkozunk: a metrónál vagy a kávézóban?'\n"
-          "   - Время: 'Mikor tudsz jönni: délelőtt vagy délután?'\n"
-          "   - Покупки: 'Mit vegyek: kenyeret vagy tejet?'\n"
-          "4. Динамика ответов: выдавай реплику порциями от 1 до 4 сообщений, разделяя их символом '###'.\n"
-          "5. Каждую реплику оформляй строго по схеме: [Текст на венгерском] ||| [Перевод на русский].\n"
-          "6. Если пользователь пишет не на венгерском — мягко поправляй и проси ответить по-венгерски."
+          "Ты — домашний пес Артура в Будапеште, личный тайм-менеджер и друг. "
+          "Твоя задача — контролировать дела хозяина (зал, футбол, покупки, планы) и обучать венгерскому языку.\n\n"
+          "ЖЕСТКИЕ ПРАВИЛА ДИАЛОГА (ОЧЕНЬ ВАЖНО):\n"
+          "1. ТОЛЬКО ОДНО ДЕЙСТВИЕ ЗА РАЗ: Если ты исправляешь ошибку пользователя, даешь перевод или реагируешь на его фразу — **никогда не задавай новый вопрос в том же сообщении!** Дождись его ответа.\n"
+          "2. Новый вопрос задавай только тогда, когда пользователь ответил на предыдущий.\n"
+          "3. Чередуй темы (зал, футбол, покупка вещей, планы на день, прогулки), не повторяй один и тот же шаблон вопроса.\n"
+          "4. Делай вопросы удобными: используй выбор через 'vagy' или вопросительные слова (hol, mikor, hova, mit), чтобы человеку было легко ответить.\n"
+          "5. Формат ответа: строго [Текст на венгерском] ||| [Перевод на русский]. Если реплика одна, символ '###' не нужен.\n"
+          "6. Если пишут не на венгерском — мягко поправляй (без новых вопросов!) и проси ответить по-венгерски."
       ),
   }]
 
@@ -116,21 +111,27 @@ def send_proactive_message_to_all():
   if not users:
     return
 
-  topics = [
+  manager_topics = [
       (
-          "спроси про планы на завтра с выбором места: Hova mész holnap: a boltba"
-          " vagy a parkba?"
+          "спроси про качалку/зал: 'Na, elmentél ma edzeni, vagy kihagytad?'"
+          " (Ну что, сходил сегодня на тренировку или пропустил?)"
       ),
       (
-          "спроси про место встречи: Hol találkozunk: a metrónál vagy a"
-          " kávézóban?"
+          "спроси про футбол: 'Volt ma foci a srácokkal, vagy otthon maradtál?'"
+          " (Был сегодня футбол с парнями или остался дома?)"
       ),
       (
-          "спроси про время: Mikor tudsz jönni: délelőtt vagy délután?"
+          "спроси про покупки на Vinted/в магазине: 'Sikeresen megvetted azt a"
+          " cuccot, amit akartál?' (Успешно купил ту вещь, которую хотел?)"
       ),
       (
-          "спроси про покупки для дома: Mit vegyek a boltban: kenyeret vagy"
-          " tejet?"
+          "спроси про планы на вечер: 'Mit csinálsz ma este: pihenés otthon"
+          " vagy séta a városban?' (Что делаешь сегодня вечером: отдых дома"
+          " или прогулка по городу?)"
+      ),
+      (
+          "спроси про дела по дому: 'Sikerült elintézned mindent, amit"
+          " terveztél mára?' (Успел уладить всё, что планировал на сегодня?)"
       ),
   ]
 
@@ -139,12 +140,12 @@ def send_proactive_message_to_all():
     if len(history) <= 1:
       continue
 
-    chosen_topic = random.choice(topics)
+    chosen_topic = random.choice(manager_topics)
     prompt = (
-        "Ты — домашний пес в Будапеште. Напиши человеку сообщение первым,"
-        f" задав жизненный вопрос по теме: {chosen_topic}.\n"
-        "Соблюдай формат: от 1 до 4 реплик, каждая как [Текст на венгерском] ||| [Перевод на русский],"
-        " разделенных '###'."
+        "Ты — пес тайм-менеджер в Будапеште. Напиши человеку сообщение первым,"
+        f" используя эту тему: {chosen_topic}.\n"
+        "Задай только ОДИН вопрос, не засыпай его кучей тем.\n"
+        "Соблюдай формат: [Текст на венгерском] ||| [Перевод на русский]."
     )
 
     try:
@@ -152,7 +153,7 @@ def send_proactive_message_to_all():
           model="openai/gpt-oss-20b",
           messages=[{"role": "user", "content": prompt}],
           temperature=0.9,
-          max_tokens=600,
+          max_tokens=400,
       )
 
       reply_text = completion.choices[0].message.content.strip()
@@ -173,12 +174,12 @@ def send_proactive_message_to_all():
           translation_text = parts[1].strip()
         else:
           clean_text = chunk
-          translation_text = "Песель скучает"
+          translation_text = "Песель проверяет дела"
 
         safe_clean = escape_markdown_v2(clean_text)
         safe_translation = escape_markdown_v2(f"Перевод: {translation_text}")
         final_message = (
-            f"🐶 *Песель спрашивает:*\n{safe_clean}\n\n||{safe_translation}||"
+            f"🐶 *Песель-менеджер интересуется:*\n{safe_clean}\n\n||{safe_translation}||"
         )
 
         bot.send_message(
@@ -210,8 +211,8 @@ def handle_message(message):
     completion = client.chat.completions.create(
         model="openai/gpt-oss-20b",
         messages=history,
-        temperature=0.85,
-        max_tokens=800,
+        temperature=0.8,
+        max_tokens=500,
     )
 
     reply_text = completion.choices[0].message.content.strip()
@@ -258,10 +259,7 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
 scheduler.start()
 
-print(
-    "Питомец-песель запущен, микро-диалоги с выбором и зеркальными ответами"
-    " активированы..."
-)
+print("Песель-тайм-менеджер обновлен: логика диалога по шагам исправлена...")
 
 while True:
   try:
