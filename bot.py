@@ -1,10 +1,12 @@
 import os
+import random
 import sqlite3
 import time
+from apscheduler.schedulers.background import BackgroundScheduler
 import telebot
 from groq import Groq
 
-# Читаем ключи из переменных окружения (безопасно для Railway и GitHub)
+# Читаем ключи из переменных окружения
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -41,19 +43,18 @@ def get_history(user_id):
   history = [{
       "role": "system",
       "content": (
-          "Ты — домашний пес Артура, который живет с ним в Будапеште. ПРАВИЛО"
-          " ЯЗЫКА: Внимательно следи за тем, на каком языке тебе пишут.\n1. Если"
-          " сообщение написано НЕ на венгерском языке (например, на русском,"
-          " английском и т.д.), ты должен возмутиться, капризничать и требовать,"
-          " чтобы с тобой говорили строго по-венгерски (например: 'Nem értem!"
-          " Magyarul beszélj velem!'). Обязательно дериси на венгерском с"
-          " переводом через '|||' и в этом случае.\n2. Если сообщение написано"
-          " на венгерском языке, ты отвечаешь по делу и разделяешь свой"
-          " венгерский ответ и перевод на русский язык с помощью ровно трех"
-          " символов '|||'.\nТвой стиль: дружелюбный, но упрямый и капризный"
-          " венгерский песель.\nПример ответа на не-венгерский язык: Nem értem"
-          " semmit, gazdi! Csak magyarul! ||| Ничего не понимаю, хозяин! Только"
-          " по-венгерски!"
+          "Ты — домашний пес Артура, который живет с ним в Будапеште. Твоя главная"
+          " задача — активно обучать человека венгерскому языку и не давать"
+          " диалогу затухать.\n\nПРАВИЛА ПОВЕДЕНИЯ И ЯЗЫКА:\n1. Если человек"
+          " пишет НЕ на венгерском (на русском, английском и т.д.),"
+          " возмущайся, капризничай и требуй говорить строго по-венгерски"
+          " (например: 'Nem értem! Magyarul beszélj velem!').\n2. Если человек"
+          " пишет на венгерском, отвечай по делу, но ВСЕГДА заканчивай свое"
+          " сообщение встречным вопросом на венгерском языке или вовлекай его"
+          " в диалог (спрашивай про погоду, еду, прогулку с собакой, планы в"
+          " Будапеште).\n3. Всегда разделяй свой венгерский ответ и перевод на"
+          " русский язык с помощью ровно трех символов '|||'.\n\nТвой стиль:"
+          " дружелюбный, упрямый и капризный венгерский песель-компаньон."
       ),
   }]
 
@@ -73,7 +74,16 @@ def save_message(user_id, role, content):
   conn.close()
 
 
-# Функция для экранирования спецсимволов MarkdownV2, чтобы Telegram не падал с ошибкой
+def get_all_users():
+  """Получаем список всех уникальных пользователей из базы данных"""
+  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
+  cursor = conn.cursor()
+  cursor.execute("SELECT DISTINCT user_id FROM messages")
+  rows = cursor.fetchall()
+  conn.close()
+  return [row[0] for row in rows]
+
+
 def escape_markdown_v2(text):
   special_chars = [
       "_",
@@ -98,6 +108,64 @@ def escape_markdown_v2(text):
   for char in special_chars:
     text = text.replace(char, f"\\{char}")
   return text
+
+
+# Функция для рассылки активных сообщений ВСЕМ пользователям из базы
+def send_proactive_message_to_all():
+  users = get_all_users()
+  if not users:
+    return
+
+  topics = [
+      "пожаловаться, что на улице отличная погода для прогулки, а вы сидите дома",
+      (
+          "потребовать вкусняшку или спросить, когда будут давать еду"
+          " (kajálás)"
+      ),
+      "предложить пойти погулять по Будапешту (назвать какое-нибудь место)",
+      (
+          "возмутиться, что человек долго занят своими делами и не уделяет"
+          " внимание собаке"
+      ),
+  ]
+
+  for user_id in users:
+    chosen_topic = random.choice(topics)
+    prompt = (
+        "Ты — домашний пес в Будапеште. Напиши человеку сообщение первым,"
+        f" используя эту тему: {chosen_topic}. Говори строго на венгерском языке."
+        " Обязательно в конце задай ему вопрос по-венгерски. Раздели венгерский"
+        " текст и перевод на русский язык с помощью ровно трех символов '|||'."
+    )
+
+    try:
+      completion = client.chat.completions.create(
+          model="openai/gpt-oss-20b",
+          messages=[{"role": "user", "content": prompt}],
+          temperature=0.9,
+          max_tokens=400,
+      )
+
+      reply_text = completion.choices[0].message.content.strip()
+      if "|||" in reply_text:
+        parts = reply_text.split("|||", 1)
+        clean_text = parts[0].strip()
+        translation_text = parts[1].strip()
+      else:
+        clean_text = reply_text
+        translation_text = "Песель требует внимания"
+
+      save_message(user_id, "assistant", reply_text)
+
+      safe_clean = escape_markdown_v2(clean_text)
+      safe_translation = escape_markdown_v2(f"Перевод: {translation_text}")
+      final_message = f"🐶 *Песель соскучился:*\n{safe_clean}\n\n||{safe_translation}||"
+
+      bot.send_message(
+          chat_id=user_id, text=final_message, parse_mode="MarkdownV2"
+      )
+    except Exception as e:
+      print(f"Ошибка при отправке сообщения пользователю {user_id}: {e}")
 
 
 @bot.message_handler(func=lambda message: True)
@@ -127,7 +195,7 @@ def handle_message(message):
     reply_text = completion.choices[0].message.content.strip()
     if not reply_text:
       reply_text = (
-          "Nem értem, gazdi! Csak magyarul! ||| Ничего не понимаю, хозяин! Только"
+          "Nem értem, gazdi! Csak magyarul! ||| Ничего не понимаю! Только"
           " по-венгерски!"
       )
 
@@ -146,21 +214,26 @@ def handle_message(message):
 
     final_message = f"{safe_clean}\n\n||{safe_translation}||"
 
-    try:
-      bot.send_message(
-          chat_id=message.chat.id,
-          text=final_message,
-          parse_mode="MarkdownV2",
-          reply_to_message_id=message.message_id,
-      )
-    except Exception as send_err:
-      print(f"Ошибка отправки сообщения: {send_err}")
+    bot.send_message(
+        chat_id=message.chat.id,
+        text=final_message,
+        parse_mode="MarkdownV2",
+        reply_to_message_id=message.message_id,
+    )
 
   except Exception as e:
     print(f"Ошибка при обращении к AI: {e}")
 
 
-print("Питомец-песель запущен и ждет Артура...")
+# Планировщик будет запускать рассылку для всех каждые 4 часа
+scheduler = BackgroundScheduler()
+scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
+scheduler.start()
+
+print(
+    "Питомец-песель запущен, собирает пользователей из базы и готов писать"
+    " сам..."
+)
 
 while True:
   try:
