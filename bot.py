@@ -77,16 +77,16 @@ def get_all_users():
 
 
 def add_spoilers_via_ai(hungarian_text):
-  """Заставляет модель перевести каждое слово прямо в формат ||перевод||"""
+  """Заставляет модель выдавать перевод в HTML-тегах спойлера"""
   try:
     prompt = (
         "У тебя есть предложение на венгерском языке: "
         f'"{hungarian_text}"\n\n'
         "Перепиши это предложение так, чтобы после каждого слова/значимого элемента "
-        "был добавлен перевод на русский язык в телеграм-спойлере в формате: слово ||перевод||.\n"
-        "Сохраняй знаки препинания (запятые, точки, вопросительные знаки) после спойлеров.\n"
+        "был добавлен перевод на русский язык в HTML-теге спойлера в формате: слово перевод.\n"
+        "Сохраняй знаки препинания после тегов.\n"
         "Пример формата вывода:\n"
-        "Szia ||привет||, Arthur ||Артур||! Milyen ||какой|| napod ||твой день|| van ||есть||?"
+        "Szia привет, Arthur Артур!"
     )
     completion = client.chat.completions.create(
         model="openai/gpt-oss-20b",
@@ -139,9 +139,9 @@ def send_proactive_message_to_all():
       save_message(user_id, "assistant", hu_text)
       final_message = add_spoilers_via_ai(hu_text)
 
-      # Отправляем с parse_mode='Markdown', чтобы спойлеры сработали
+      # Отправляем с parse_mode='HTML'
       bot.send_message(
-          chat_id=user_id, text=final_message, parse_mode="Markdown"
+          chat_id=user_id, text=final_message, parse_mode="HTML"
       )
       time.sleep(0.5)
 
@@ -179,11 +179,11 @@ def handle_message(message):
 
     save_message(user_id, "assistant", hu_text)
 
-    # Генерируем спойлеры для каждого слова через отдельный точный промт
+    # Генерируем спойлеры для каждого слова через HTML-теги
     final_message = add_spoilers_via_ai(hu_text)
 
     bot.send_message(
-        chat_id=message.chat.id, text=final_message, parse_mode="Markdown"
+        chat_id=message.chat.id, text=final_message, parse_mode="HTML"
     )
     time.sleep(0.5)
 
@@ -195,7 +195,7 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
 scheduler.start()
 
-print("Песель запущен: спойлеры после каждого слова активированы...")
+print("Песель запущен: HTML-спойлеры после каждого слова активированы...")
 
 while True:
   try:
