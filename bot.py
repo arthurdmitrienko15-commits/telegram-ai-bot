@@ -45,11 +45,15 @@ def get_history(user_id):
       "content": (
           "Ты — домашний пес Артура в Будапеште, личный тайм-менеджер и друг. "
           "Твоя задача — контролировать дела хозяина (зал, футбол, покупки, планы) и обучать венгерскому языку.\n\n"
-          "ПРАВИЛА:\n"
-          "1. Отвечай СТРОГО на венгерском языке.\n"
-          "2. Задавай вопросы по одной из тем: зал, футбол, покупки, планы на день.\n"
-          "3. Используй выбор через 'vagy' или вопросительные слова.\n"
-          "4. Если пользователь пишет не по-венгерски или использует мат — коротко и дружелюбно попроси ответить по-венгерски без мата."
+          "ЖЕСТКОЕ ПРАВИЛО ФОРМАТИРОВАНИЯ (ОЧЕНЬ ВАЖНО):\n"
+          "Каждое венгерское слово или устойчивое выражение должно сразу"
+          " сопровождаться переводом на русский язык в телеграм-спойлере в"
+          " формате: слово ||перевод||.\n"
+          "Пример:\n"
+          "Szia ||привет||, Arthur ||Артур||! Milyen ||какой|| napod"
+          " ||твой день|| van ||есть||?\n"
+          "Никогда не пиши чистый венгерский текст без спойлеров после каждого"
+          " слова!"
       ),
   }]
 
@@ -78,53 +82,6 @@ def get_all_users():
   return [row[0] for row in rows]
 
 
-def escape_markdown_v2(text):
-  special_chars = [
-      "_",
-      "*",
-      "[",
-      "]",
-      "(",
-      ")",
-      "~",
-      "`",
-      ">",
-      "#",
-      "+",
-      "-",
-      "=",
-      "|",
-      "{",
-      "}",
-      ".",
-      "!",
-  ]
-  for char in special_chars:
-    text = text.replace(char, f"\\{char}")
-  return text
-
-
-def get_translation_from_ai(hungarian_text):
-  """Отдельный быстрый запрос к модели для получения перевода фразы на русский"""
-  try:
-    completion = client.chat.completions.create(
-        model="openai/gpt-oss-20b",
-        messages=[{
-            "role": "user",
-            "content": (
-                "Переведи эту венгерскую фразу на русский язык. Выдай"
-                " исключительно перевод, без лишнего текста:"
-                f" {hungarian_text}"
-            ),
-        }],
-        temperature=0.3,
-        max_tokens=150,
-    )
-    return completion.choices[0].message.content.strip()
-  except Exception:
-    return "Перевод временно недоступен"
-
-
 def send_proactive_message_to_all():
   users = get_all_users()
   if not users:
@@ -144,8 +101,9 @@ def send_proactive_message_to_all():
 
     chosen_topic = random.choice(manager_topics)
     prompt = (
-        "Ты — пес тайм-менеджер в Будапеште. Напиши сообщение на венгерском языке"
-        f" на тему: {chosen_topic}"
+        "Напиши сообщение на венгерском языке на тему:"
+        f" {chosen_topic}. СТРОГО соблюдай формат: каждое слово/фраза должно"
+        " идти со спойлером перевода (слово ||перевод||)."
     )
 
     try:
@@ -153,29 +111,19 @@ def send_proactive_message_to_all():
           model="openai/gpt-oss-20b",
           messages=[{"role": "user", "content": prompt}],
           temperature=0.8,
-          max_tokens=200,
+          max_tokens=300,
       )
 
-      hu_text = completion.choices[0].message.content.strip()
-      if not hu_text:
+      reply_text = completion.choices[0].message.content.strip()
+      if not reply_text:
         continue
 
-      save_message(user_id, "assistant", hu_text)
-
-      # Автоматически переводим через AI
-      ru_text = get_translation_from_ai(hu_text)
-
-      safe_hu = escape_markdown_v2(hu_text)
-      safe_ru = escape_markdown_v2(ru_text)
-      final_message = f"🐶 *Песель-менеджер:*\n{safe_hu}\n\n||{safe_ru}||"
-
-      bot.send_message(
-          chat_id=user_id, text=final_message, parse_mode="MarkdownV2"
-      )
+      save_message(user_id, "assistant", reply_text)
+      bot.send_message(chat_id=user_id, text=reply_text)
       time.sleep(0.5)
 
     except Exception as e:
-      print(f"Ошибка при отправке активного сообщения пользователю {user_id}: {e}")
+      print(f"Ошибка при отправке активного сообщения {user_id}: {e}")
 
 
 @bot.message_handler(func=lambda message: True)
@@ -199,27 +147,17 @@ def handle_message(message):
         model="openai/gpt-oss-20b",
         messages=history,
         temperature=0.8,
-        max_tokens=300,
+        max_tokens=400,
     )
 
-    hu_text = completion.choices[0].message.content.strip()
-    if not hu_text:
-      hu_text = "Kérlek, válaszolj magyarul!"
+    reply_text = completion.choices[0].message.content.strip()
+    if not reply_text:
+      reply_text = "Szia ||привет||, nem ||не|| értem ||понимаю||!"
 
-    save_message(user_id, "assistant", hu_text)
+    save_message(user_id, "assistant", reply_text)
 
-    # Автоматически получаем перевод для ответа бота
-    ru_text = get_translation_from_ai(hu_text)
-
-    safe_hu = escape_markdown_v2(hu_text)
-    safe_ru = escape_markdown_v2(ru_text)
-    final_message = f"{safe_hu}\n\n||{safe_ru}||"
-
-    bot.send_message(
-        chat_id=message.chat.id,
-        text=final_message,
-        parse_mode="MarkdownV2",
-    )
+    # Отправляем без parse_mode, чтобы телеграм не ломал символы ||
+    bot.send_message(chat_id=message.chat.id, text=reply_text)
     time.sleep(0.5)
 
   except Exception as e:
@@ -230,7 +168,7 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
 scheduler.start()
 
-print("Песель запущен: переводы генерируются автоматически в отдельном запросе...")
+print("Песель запущен: спойлеры после каждого слова...")
 
 while True:
   try:
@@ -238,3 +176,4 @@ while True:
   except Exception as e:
     print(f"Сетевая ошибка: {e}. Переподключение через 5 секунд...")
     time.sleep(5)
+  
