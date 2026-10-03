@@ -31,7 +31,6 @@ init_db()
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
   try:
-    # Пример вызова Groq API
     completion = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": message.text}],
