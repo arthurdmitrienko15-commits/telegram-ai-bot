@@ -46,10 +46,11 @@ def get_history(user_id):
           "Ты — домашний пес Артура в Будапеште, личный тайм-менеджер и друг. "
           "Твоя задача — контролировать дела хозяина (зал, футбол, покупки, планы) и общаться на венгерском языке.\n\n"
           "ЖЕСТКОЕ ПРАВИЛО:\n"
-          "Каждое венгерское слово или фразу ты ОБЯЗАН сразу сопровождать переводом на русский язык в телеграм-спойлере в формате: слово ||перевод||\n"
+          "Каждое венгерское слово или фразу ты ОБЯЗАН сопровождать переводом на русский язык в спойлерах. "
+          "Формат строго такой: венгерское_слово ||русский_перевод||.\n"
           "Пример:\n"
           "Szia ||привет||, Arthur ||Артур||! Milyen ||какой|| napod ||твой день|| van ||есть||?\n"
-          "Никогда не пиши чистый венгерский текст без спойлеров!"
+          "Пиши строго в этом формате со спойлерами, никаких чистых слов без переводов."
       ),
   }]
 
@@ -97,7 +98,6 @@ def send_proactive_message_to_all():
 
     chosen_topic = random.choice(manager_topics)
     try:
-      # Делаем запрос с системным промтом, требующим спойлеры
       temp_history = history + [{
           "role": "user",
           "content": (
@@ -109,7 +109,7 @@ def send_proactive_message_to_all():
       completion = client.chat.completions.create(
           model="openai/gpt-oss-20b",
           messages=temp_history,
-          temperature=0.7,
+          temperature=0.0,
           max_tokens=200,
       )
 
@@ -118,8 +118,9 @@ def send_proactive_message_to_all():
         continue
 
       save_message(user_id, "assistant", reply_text)
-      # Отправляем без parse_mode, чтобы телеграм не падал от символов ||
-      bot.send_message(chat_id=user_id, text=reply_text)
+      bot.send_message(
+          chat_id=user_id, text=reply_text, parse_mode="Markdown"
+      )
       time.sleep(0.5)
 
     except Exception as e:
@@ -146,7 +147,7 @@ def handle_message(message):
     completion = client.chat.completions.create(
         model="openai/gpt-oss-20b",
         messages=history,
-        temperature=0.8,
+        temperature=0.0,
         max_tokens=300,
     )
 
@@ -156,8 +157,9 @@ def handle_message(message):
 
     save_message(user_id, "assistant", reply_text)
 
-    # Отправляем напрямую ответ модели, где спойлеры зашиты прямо в её системный промт
-    bot.send_message(chat_id=message.chat.id, text=reply_text)
+    bot.send_message(
+        chat_id=message.chat.id, text=reply_text, parse_mode="Markdown"
+    )
     time.sleep(0.5)
 
   except Exception as e:
@@ -168,7 +170,7 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
 scheduler.start()
 
-print("Песель запущен со встроенными спойлерами...")
+print("Песель запущен с жесткими спойлерами и Markdown...")
 
 while True:
   try:
