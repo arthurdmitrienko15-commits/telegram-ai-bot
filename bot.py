@@ -76,28 +76,56 @@ def get_all_users():
   return [row[0] for row in rows]
 
 
-def add_spoilers_via_ai(hungarian_text):
-  """Заставляет модель выдавать перевод в HTML-тегах спойлера с защитой от пустоты"""
+def add_spoilers_programmatically(hungarian_text):
+  """Жестко заставляет модель перевести каждое слово в формате слово=перевод,
+
+  после чего Python сам собирает строку со спойлерами. Никаких ошибок тегов.
+  """
   try:
     prompt = (
-        f'У тебя есть предложение на венгерском языке: "{hungarian_text}"\n\n'
-        "Перепиши это предложение так, чтобы после каждого слова/значимого элемента "
-        "был добавлен перевод на русский язык в HTML-теге спойлера в формате: слово перевод.\n"
-        "Сохраняй знаки препинания после тегов.\n"
-        "Пример формата вывода:\n"
-        "Szia привет, Arthur Артур!"
+        f'Переведи каждое слово из этого венгерского предложения: "{hungarian_text}"\n'
+        "Выдай ответ СТРОГО в формате пар слово-перевод через запятую, например:\n"
+        "Szia=привет, Arthur=Артур, miben=в чем\n"
+        "Не пиши ничего лишнего, только пары слово=перевод."
     )
     completion = client.chat.completions.create(
         model="openai/gpt-oss-20b",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-        max_tokens=400,
+        temperature=0.1,
+        max_tokens=300,
     )
-    res = completion.choices[0].message.content.strip()
-    # Если модель вернула пустоту, отдаем исходный текст
-    return res if res else hungarian_text
+    raw_res = completion.choices[0].message.content.strip()
+
+    # Парсим пары слово=перевод
+    translations = {}
+    pairs = raw_res.split(",")
+    for pair in pairs:
+      if "=" in pair:
+        parts = pair.split("=")
+        if len(parts) == 2:
+          word = parts[0].strip()
+          translation = parts[1].strip()
+          translations[word.lower()] = translation
+
+    # Собираем исходный текст обратно, оборачивая каждое слово в спойлер
+    words = hungarian_text.split(" ")
+    result_parts = []
+    for w in words:
+      # Очищаем слово от знаков препинания для поиска в словаре
+      clean_w = "".join(filter(str.isalnum, w))
+      tr = translations.get(clean_w.lower())
+
+      if tr:
+        # Заменяем чистое слово на слово + спойлер, сохраняя знаки препинания
+        formatted = w.replace(clean_w, f"{clean_w} ||{tr}||")
+        result_parts.append(formatted)
+      else:
+        result_parts.append(w)
+
+    return " ".join(result_parts)
+
   except Exception as e:
-    print(f"Ошибка перевода со спойлерами: {e}")
+    print(f"Ошибка программных спойлеров: {e}")
     return hungarian_text
 
 
@@ -138,12 +166,9 @@ def send_proactive_message_to_all():
         continue
 
       save_message(user_id, "assistant", hu_text)
-      final_message = add_spoilers_via_ai(hu_text)
+      final_message = add_spoilers_programmatically(hu_text)
 
-      if final_message:
-        bot.send_message(
-            chat_id=user_id, text=final_message, parse_mode="HTML"
-        )
+      bot.send_message(chat_id=user_id, text=final_message)
       time.sleep(0.5)
 
     except Exception as e:
@@ -180,13 +205,10 @@ def handle_message(message):
 
     save_message(user_id, "assistant", hu_text)
 
-    # Генерируем спойлеры для каждого слова через HTML-теги
-    final_message = add_spoilers_via_ai(hu_text)
+    # Надежно добавляем спойлеры через код Python
+    final_message = add_spoilers_programmatically(hu_text)
 
-    if final_message:
-      bot.send_message(
-          chat_id=message.chat.id, text=final_message, parse_mode="HTML"
-      )
+    bot.send_message(chat_id=message.chat.id, text=final_message)
     time.sleep(0.5)
 
   except Exception as e:
@@ -197,7 +219,7 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
 scheduler.start()
 
-print("Песель запущен: HTML-спойлеры и защиты активированы...")
+print("Песель запущен: программные спойлеры активны...")
 
 while True:
   try:
