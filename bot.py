@@ -40,17 +40,13 @@ def get_history(user_id):
   rows = cursor.fetchall()
   conn.close()
 
+  # Модель теперь общается просто на венгерском, без требований писать теги
   history = [{
       "role": "system",
       "content": (
           "Ты — домашний пес Артура в Будапеште, личный тайм-менеджер и друг. "
-          "Твоя задача — контролировать дела хозяина (зал, футбол, покупки, планы) и общаться на венгерском языке.\n\n"
-          "ЖЕСТКОЕ ПРАВИЛО:\n"
-          "Каждое венгерское слово или фразу ты ОБЯЗАН сопровождать переводом на русский язык в HTML-теге спойлера. "
-          "Формат строго такой: венгерское_слово русский_перевод.\n"
-          "Пример:\n"
-          "Szia привет, Arthur Артур! Milyen какой napod твой день van есть?\n"
-          "Пиши строго в этом формате с HTML-тегами спойлеров, никаких других форматов."
+          "Твоя задача — контролировать дела хозяина (зал, футбол, покупки, планы) и общаться СТРОГО на венгерском языке.\n"
+          "Пиши короткими, понятными предложениями, без разметки и тегов."
       ),
   }]
 
@@ -79,6 +75,55 @@ def get_all_users():
   return [row[0] for row in rows]
 
 
+def generate_programmatic_spoilers(hungarian_text):
+  """Python сам запрашивает перевод и безопасно собирает HTML-спойлеры."""
+  try:
+    prompt = (
+        "Переведи каждое значимое слово из этого венгерского предложения:"
+        f' "{hungarian_text}"\nВыдай ответ СТРОГО в формате по одной паре на'
+        " строку:\nвенгерское_слово : перевод\nПример:\nSzia : привет\nArthur"
+        " : Артур\nБольше ничего не пиши, только пары слово : перевод."
+    )
+    completion = client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0,
+        max_tokens=300,
+    )
+    raw_res = completion.choices[0].message.content.strip()
+
+    # Парсим словарь перевода
+    translations = {}
+    for line in raw_res.split("\n"):
+      if ":" in line:
+        parts = line.split(":")
+        if len(parts) == 2:
+          w = parts[0].strip()
+          t = parts[1].strip()
+          translations[w.lower()] = t
+
+    # Собираем предложение заново в Python, внедряя HTML спойлеры
+    words = hungarian_text.split(" ")
+    result_parts = []
+    for w in words:
+      clean_w = "".join(filter(str.isalnum, w))
+      translation = translations.get(clean_w.lower())
+
+      if translation:
+        # Вставляем спойлер прямо после слова, сохраняя знаки препинания
+        formatted_word = w.replace(
+            clean_w, f"{clean_w}{translation}"
+        )
+        result_parts.append(formatted_word)
+      else:
+        result_parts.append(w)
+
+    return " ".join(result_parts)
+  except Exception as e:
+    print(f"Ошибка программных спойлеров: {e}")
+    return hungarian_text
+
+
 def send_proactive_message_to_all():
   users = get_all_users()
   if not users:
@@ -101,24 +146,26 @@ def send_proactive_message_to_all():
       temp_history = history + [{
           "role": "user",
           "content": (
-              "Напиши короткое сообщение на эту тему со спойлерами перевода через"
-              f" HTML-теги: {chosen_topic}"
+              "Напиши короткое сообщение на венгерском языке на тему:"
+              f" {chosen_topic}"
           ),
       }]
 
       completion = client.chat.completions.create(
           model="openai/gpt-oss-20b",
           messages=temp_history,
-          temperature=0.0,
-          max_tokens=200,
+          temperature=0.7,
+          max_tokens=150,
       )
 
-      reply_text = completion.choices[0].message.content.strip()
-      if not reply_text:
+      hu_text = completion.choices[0].message.content.strip()
+      if not hu_text:
         continue
 
-      save_message(user_id, "assistant", reply_text)
-      bot.send_message(chat_id=user_id, text=reply_text, parse_mode="HTML")
+      save_message(user_id, "assistant", hu_text)
+      final_text = generate_programmatic_spoilers(hu_text)
+
+      bot.send_message(chat_id=user_id, text=final_text, parse_mode="HTML")
       time.sleep(0.5)
 
     except Exception as e:
@@ -145,21 +192,21 @@ def handle_message(message):
     completion = client.chat.completions.create(
         model="openai/gpt-oss-20b",
         messages=history,
-        temperature=0.0,
+        temperature=0.8,
         max_tokens=300,
     )
 
-    reply_text = completion.choices[0].message.content.strip()
-    if not reply_text:
-      reply_text = (
-          "Szia привет, nem"
-          " не értem понимаю!"
-      )
+    hu_text = completion.choices[0].message.content.strip()
+    if not hu_text:
+      hu_text = "Nem értem!"
 
-    save_message(user_id, "assistant", reply_text)
+    save_message(user_id, "assistant", hu_text)
+
+    # Спойлеры собираются силами Python
+    final_text = generate_programmatic_spoilers(hu_text)
 
     bot.send_message(
-        chat_id=message.chat.id, text=reply_text, parse_mode="HTML"
+        chat_id=message.chat.id, text=final_text, parse_mode="HTML"
     )
     time.sleep(0.5)
 
@@ -171,7 +218,7 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
 scheduler.start()
 
-print("Песель запущен с HTML-спойлерами...")
+print("Песель запущен с программной сборкой спойлеров...")
 
 while True:
   try:
