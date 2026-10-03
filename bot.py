@@ -43,19 +43,20 @@ def get_history(user_id):
   history = [{
       "role": "system",
       "content": (
-          "Ты — домашний пес Артура в Будапеште. Твоя задача — живо, "
-          "реалистично и непредсказуемо общаться, обучая венгерскому языку.\n\n"
-          "ДИНАМИКА ОТВЕТОВ (ОЧЕНЬ ВАЖНО):\n"
-          "Меняй количество реплик в зависимости от ситуации (от 1 до 4 штук). "
-          "Иногда ответь коротко одним предложением, иногда добавь реакцию и совет, "
-          "а иногда устрой целый монолог на 3–4 сообщения.\n\n"
-          "ФОРМАТ ВЫВОДА:\n"
-          "Каждую реплику оформляй по схеме: [Текст на венгерском] ||| [Перевод на русский].\n"
-          "Если реплик несколько, разделяй их строго символом '###' на отдельной строке.\n\n"
-          "Пример разделения:\n"
-          "Szia, gazdi! ||| Привет, хозяин!\n###\n"
-          "Miért vagy ma ilyen csendes? ||| Почему ты сегодня такой тихий?\n\n"
-          "Правила языка: если пишут не на венгерском — возмущайся и требуй венгерский."
+          "Ты — домашний пес Артура в Будапеште. Твоя задача — тренировать венгерский язык "
+          "через практичные, живые микро-диалоги, похожие на реальную жизнь.\n\n"
+          "МЕХАНИКА ОБЩЕНИЯ (ОЧЕНЬ ВАЖНО):\n"
+          "1. Задавай вопросы из реальной жизни (планы, встречи, работа, магазин, прогулки с собакой).\n"
+          "2. Используй вопросительные слова (hol, mikor, hova, mit) или выбор через 'vagy', "
+          "чтобы человеку было максимально легко ответить, зеркально отражая слова из твоего вопроса.\n"
+          "3. Примеры тем для вопросов:\n"
+          "   - Планы: 'Hova mész holnap: a boltba vagy a parkba?'\n"
+          "   - Встреча: 'Hol találkozunk: a metrónál vagy a kávézóban?'\n"
+          "   - Время: 'Mikor tudsz jönni: délelőtt vagy délután?'\n"
+          "   - Покупки: 'Mit vegyek: kenyeret vagy tejet?'\n"
+          "4. Динамика ответов: выдавай реплику порциями от 1 до 4 сообщений, разделяя их символом '###'.\n"
+          "5. Каждую реплику оформляй строго по схеме: [Текст на венгерском] ||| [Перевод на русский].\n"
+          "6. Если пользователь пишет не на венгерском — мягко поправляй и проси ответить по-венгерски."
       ),
   }]
 
@@ -76,7 +77,6 @@ def save_message(user_id, role, content):
 
 
 def get_all_users():
-  """Получаем список всех уникальных пользователей из базы данных"""
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
   cursor.execute("SELECT DISTINCT user_id FROM messages")
@@ -111,27 +111,30 @@ def escape_markdown_v2(text):
   return text
 
 
-# Функция для проактивной рассылки сообщений всем пользователям из базы
 def send_proactive_message_to_all():
   users = get_all_users()
   if not users:
     return
 
   topics = [
-      "пожаловаться, что на улице отличная погода для прогулки по Будапешту, а вы сидите дома",
       (
-          "потребовать вкусняшку или спросить, когда будут давать еду"
-          " (kajálás)"
+          "спроси про планы на завтра с выбором места: Hova mész holnap: a boltba"
+          " vagy a parkba?"
       ),
-      "предложить сбегать на прогулку в парк или к Дунаю",
       (
-          "возмутиться, что человек долго занят своими делами и совсем не"
-          " уделяет внимание собаке"
+          "спроси про место встречи: Hol találkozunk: a metrónál vagy a"
+          " kávézóban?"
+      ),
+      (
+          "спроси про время: Mikor tudsz jönni: délelőtt vagy délután?"
+      ),
+      (
+          "спроси про покупки для дома: Mit vegyek a boltban: kenyeret vagy"
+          " tejet?"
       ),
   ]
 
   for user_id in users:
-    # Проверяем, что у пользователя уже есть история диалога
     history = get_history(user_id)
     if len(history) <= 1:
       continue
@@ -139,9 +142,9 @@ def send_proactive_message_to_all():
     chosen_topic = random.choice(topics)
     prompt = (
         "Ты — домашний пес в Будапеште. Напиши человеку сообщение первым,"
-        f" используя эту тему: {chosen_topic}.\n"
-        "Соблюдай формат: от 1 до 4 реплик, каждая оформлена как [Текст на венгерском] ||| [Перевод на русский],"
-        " разделенных символом '###' на отдельной строке. Говори строго по-венгерски."
+        f" задав жизненный вопрос по теме: {chosen_topic}.\n"
+        "Соблюдай формат: от 1 до 4 реплик, каждая как [Текст на венгерском] ||| [Перевод на русский],"
+        " разделенных '###'."
     )
 
     try:
@@ -170,12 +173,12 @@ def send_proactive_message_to_all():
           translation_text = parts[1].strip()
         else:
           clean_text = chunk
-          translation_text = "Песель соскучился"
+          translation_text = "Песель скучает"
 
         safe_clean = escape_markdown_v2(clean_text)
         safe_translation = escape_markdown_v2(f"Перевод: {translation_text}")
         final_message = (
-            f"🐶 *Песель напоминает о себе:*\n{safe_clean}\n\n||{safe_translation}||"
+            f"🐶 *Песель спрашивает:*\n{safe_clean}\n\n||{safe_translation}||"
         )
 
         bot.send_message(
@@ -233,7 +236,7 @@ def handle_message(message):
         translation_text = parts[1].strip()
       else:
         clean_text = chunk
-        translation_text = "Песель лает"
+        translation_text = "Песель слушает"
 
       safe_clean = escape_markdown_v2(clean_text)
       safe_translation = escape_markdown_v2(f"Перевод: {translation_text}")
@@ -251,12 +254,14 @@ def handle_message(message):
     print(f"Ошибка при обращении к AI: {e}")
 
 
-# Настраиваем планировщик: пес будет писать первым всем пользователям каждые 4 часа
 scheduler = BackgroundScheduler()
 scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
 scheduler.start()
 
-print("Питомец-песель запущен, следит за базой и готов писать первым...")
+print(
+    "Питомец-песель запущен, микро-диалоги с выбором и зеркальными ответами"
+    " активированы..."
+)
 
 while True:
   try:
