@@ -46,11 +46,11 @@ def get_history(user_id):
           "Ты — домашний пес Артура в Будапеште, личный тайм-менеджер и друг. "
           "Твоя задача — контролировать дела хозяина (зал, футбол, покупки, планы) и общаться на венгерском языке.\n\n"
           "ЖЕСТКОЕ ПРАВИЛО:\n"
-          "Каждое венгерское слово или фразу ты ОБЯЗАН сопровождать переводом на русский язык в спойлерах. "
-          "Формат строго такой: венгерское_слово ||русский_перевод||.\n"
+          "Каждое венгерское слово или фразу ты ОБЯЗАН сопровождать переводом на русский язык в HTML-теге спойлера. "
+          "Формат строго такой: венгерское_слово русский_перевод.\n"
           "Пример:\n"
-          "Szia ||привет||, Arthur ||Артур||! Milyen ||какой|| napod ||твой день|| van ||есть||?\n"
-          "Пиши строго в этом формате со спойлерами, никаких чистых слов без переводов."
+          "Szia привет, Arthur Артур! Milyen какой napod твой день van есть?\n"
+          "Пиши строго в этом формате с HTML-тегами спойлеров, никаких других форматов."
       ),
   }]
 
@@ -101,8 +101,8 @@ def send_proactive_message_to_all():
       temp_history = history + [{
           "role": "user",
           "content": (
-              "Напиши короткое сообщение на эту тему со спойлерами перевода:"
-              f" {chosen_topic}"
+              "Напиши короткое сообщение на эту тему со спойлерами перевода через"
+              f" HTML-теги: {chosen_topic}"
           ),
       }]
 
@@ -118,9 +118,7 @@ def send_proactive_message_to_all():
         continue
 
       save_message(user_id, "assistant", reply_text)
-      bot.send_message(
-          chat_id=user_id, text=reply_text, parse_mode="Markdown"
-      )
+      bot.send_message(chat_id=user_id, text=reply_text, parse_mode="HTML")
       time.sleep(0.5)
 
     except Exception as e:
@@ -153,12 +151,15 @@ def handle_message(message):
 
     reply_text = completion.choices[0].message.content.strip()
     if not reply_text:
-      reply_text = "Szia ||привет||, nem ||не|| értem ||понимаю||!"
+      reply_text = (
+          "Szia привет, nem"
+          " не értem понимаю!"
+      )
 
     save_message(user_id, "assistant", reply_text)
 
     bot.send_message(
-        chat_id=message.chat.id, text=reply_text, parse_mode="Markdown"
+        chat_id=message.chat.id, text=reply_text, parse_mode="HTML"
     )
     time.sleep(0.5)
 
@@ -170,7 +171,7 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
 scheduler.start()
 
-print("Песель запущен с жесткими спойлерами и Markdown...")
+print("Песель запущен с HTML-спойлерами...")
 
 while True:
   try:
