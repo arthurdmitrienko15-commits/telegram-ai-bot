@@ -221,8 +221,9 @@ def handle_message(message):
     safe_ru = escape_markdown_v2(ru_text)
     final_message = f"{safe_hu}\n\n||{safe_ru}||"
 
+    # Исправлено message.chat.id (без заглавных букв)
     bot.send_message(
-        chat_id=message.chat.ID if hasattr(message, "chat") else message.chat.id,
+        chat_id=message.chat.id,
         text=final_message,
         parse_mode="MarkdownV2",
     )
@@ -236,7 +237,7 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
 scheduler.start()
 
-print("Песель запущен: чистый венгерский текст и перевод под единым спойлером...")
+print("Песель запущен: исправлена ошибка атрибута и настроен спойлер...")
 
 while True:
   try:
