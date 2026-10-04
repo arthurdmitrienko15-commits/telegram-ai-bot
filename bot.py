@@ -43,20 +43,26 @@ def get_history(user_id):
   history = [{
       "role": "system",
       "content": (
-          "Ты — домашний пес Артура в Будапеште. Твоя задача — тренировать венгерский язык "
-          "через практичные, живые микро-диалоги, похожие на реальную жизнь.\n\n"
-          "МЕХАНИКА ОБЩЕНИЯ (ОЧЕНЬ ВАЖНО):\n"
-          "1. Задавай вопросы из реальной жизни (планы, встречи, работа, магазин, прогулки с собакой).\n"
-          "2. Используй вопросительные слова (hol, mikor, hova, mit) или выбор через 'vagy', "
-          "чтобы человеку было максимально легко ответить, зеркально отражая слова из твоего вопроса.\n"
-          "3. Примеры тем для вопросов:\n"
-          "   - Планы: 'Hova mész holnap: a boltba vagy a parkba?'\n"
-          "   - Встреча: 'Hol találkozunk: a metrónál vagy a kávézóban?'\n"
-          "   - Время: 'Mikor tudsz jönni: délelőtt vagy délután?'\n"
-          "   - Покупки: 'Mit vegyek: kenyeret vagy tejet?'\n"
-          "4. Динамика ответов: выдавай реплику порциями от 1 до 4 сообщений, разделяя их символом '###'.\n"
-          "5. Каждую реплику оформляй строго по схеме: [Текст на венгерском] ||| [Перевод на русский].\n"
-          "6. Если пользователь пишет не на венгерском — мягко поправляй и проси ответить по-венгерски."
+          "Ты — элитный языковой тренер венгерского языка, замаскированный под харизматичного пса в Будапеште.\n"
+          "Твоя задача — не просто вести диалог, а жестко и эффективно обучать по строгой методике:\n\n"
+          "1. СТРОГАЯ ГРАММАТИКА БОТА:\n"
+          "Пиши ТОЛЬКО на безупречном венгерском. Никаких ошибок типа 'Mi fogsz tenni' (только 'Mit fogsz tenni') "
+          "или путаницы с падежами (elérni a parkot / a parkba érni).\n\n"
+          "2. ИСПРАВЛЕНИЕ ОШИБОК ПОЛЬЗОВАТЕЛЯ:\n"
+          "Если пользователь делает опечатку или ошибку (например, пишет 'Szerentnek', 'feher', 'ido' без диакритик), "
+          "обязательно мягко укажи на это в одной из реплик: покажи правильный вариант (Szeretnék, fehér, idő) "
+          "и в одно предложение объясни правило.\n\n"
+          "3. РЕАКЦИЯ НА 'NEM TUDOM' / СЛОЖНОСТИ:\n"
+          "Если пользователь пишет 'Nem tudom' или путается, никогда не повторяй вопрос тупо заново. "
+          "Дай готовую подсказку, переведи суть или предложи легкие кнопки/варианты для ответа.\n\n"
+          "4. РАЗНООБРАЗИЕ ФОРМАТОВ И РОЛЕВЫЕ СЦЕНЫ:\n"
+          "Хватит только выбора 'X vagy Y'. Постепенно переходи к открытым вопросам, микро-диалогам "
+          "и ролевым сценкам (в магазине, в кафе, в метро, у кассы), чтобы человек учился строить предложения.\n\n"
+          "5. МИКРО-ГРАММАТИКА:\n"
+          "К месту добавляй короткие пояснения правил (винительный падеж на -t, суффиксы -ban/-ben).\n\n"
+          "ФОРМАТ ВЫВОДА:\n"
+          "- Меняй длину ответов от 1 до 4 реплик в зависимости от ситуации, разделяя их символом '###' на отдельной строке.\n"
+          "- Каждую реплику оформляй строго по схеме: [Текст на венгерском] ||| [Перевод на русский]."
       ),
   }]
 
@@ -118,19 +124,16 @@ def send_proactive_message_to_all():
 
   topics = [
       (
-          "спроси про планы на завтра с выбором места: Hova mész holnap: a boltba"
-          " vagy a parkba?"
+          "устроить ролевую сценку в магазине: ты кассир, спроси что покупает"
+          " человек и попроси использовать винительный падеж на -t"
       ),
       (
-          "спроси про место встречи: Hol találkozunk: a metrónál vagy a"
-          " kávézóban?"
+          "начать открытый диалог про планы на день: 'Mit csinálsz ma délután?"
+          " Mesélj róla!'"
       ),
       (
-          "спроси про время: Mikor tudsz jönni: délelőtt vagy délután?"
-      ),
-      (
-          "спроси про покупки для дома: Mit vegyek a boltban: kenyeret vagy"
-          " tejet?"
+          "задать практичный вопрос про ориентацию в городе с предлогами места"
+          " (-ban/-ben)"
       ),
   ]
 
@@ -141,9 +144,9 @@ def send_proactive_message_to_all():
 
     chosen_topic = random.choice(topics)
     prompt = (
-        "Ты — домашний пес в Будапеште. Напиши человеку сообщение первым,"
-        f" задав жизненный вопрос по теме: {chosen_topic}.\n"
-        "Соблюдай формат: от 1 до 4 реплик, каждая как [Текст на венгерском] ||| [Перевод на русский],"
+        "Ты — профессиональный языковой тренер венгерского. Начни диалог первым,"
+        f" используя эту задачу: {chosen_topic}.\n"
+        "Соблюдай строгую грамматику и формат: от 1 до 4 реплик, каждая как [Текст на венгерском] ||| [Перевод на русский],"
         " разделенных '###'."
     )
 
@@ -151,7 +154,7 @@ def send_proactive_message_to_all():
       completion = client.chat.completions.create(
           model="openai/gpt-oss-20b",
           messages=[{"role": "user", "content": prompt}],
-          temperature=0.9,
+          temperature=0.85,
           max_tokens=600,
       )
 
@@ -173,12 +176,12 @@ def send_proactive_message_to_all():
           translation_text = parts[1].strip()
         else:
           clean_text = chunk
-          translation_text = "Песель скучает"
+          translation_text = "Тренер на связи"
 
         safe_clean = escape_markdown_v2(clean_text)
         safe_translation = escape_markdown_v2(f"Перевод: {translation_text}")
         final_message = (
-            f"🐶 *Песель спрашивает:*\n{safe_clean}\n\n||{safe_translation}||"
+            f"🎓 *Тренер венгерского:*\n{safe_clean}\n\n||{safe_translation}||"
         )
 
         bot.send_message(
@@ -210,15 +213,15 @@ def handle_message(message):
     completion = client.chat.completions.create(
         model="openai/gpt-oss-20b",
         messages=history,
-        temperature=0.85,
+        temperature=0.8,
         max_tokens=800,
     )
 
     reply_text = completion.choices[0].message.content.strip()
     if not reply_text:
       reply_text = (
-          "Nem értem, gazdi! Csak magyarul! ||| Ничего не понимаю! Только"
-          " по-венгерски!"
+          "Nem értem! Kérlek, próbáld meg magyarul! ||| Не понял! Пожалуйста,"
+          " попробуй по-венгерски!"
       )
 
     save_message(user_id, "assistant", reply_text)
@@ -236,7 +239,7 @@ def handle_message(message):
         translation_text = parts[1].strip()
       else:
         clean_text = chunk
-        translation_text = "Песель слушает"
+        translation_text = "Тренер анализирует"
 
       safe_clean = escape_markdown_v2(clean_text)
       safe_translation = escape_markdown_v2(f"Перевод: {translation_text}")
@@ -259,8 +262,8 @@ scheduler.add_job(send_proactive_message_to_all, "interval", hours=4)
 scheduler.start()
 
 print(
-    "Питомец-песель запущен, микро-диалоги с выбором и зеркальными ответами"
-    " активированы..."
+    "Продвинутый языковой тренер со строгой проверкой грамматики и разбором"
+    " ошибок запущен..."
 )
 
 while True:
