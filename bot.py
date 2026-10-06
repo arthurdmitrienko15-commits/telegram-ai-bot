@@ -1,4 +1,5 @@
 import os
+import random
 import re
 import sqlite3
 import time
@@ -83,7 +84,7 @@ SYSTEM_PROMPT = (
     "   — Новичок (A1–A2: односложные ответы, много ошибок, просит помощи): очень"
     " короткие фразы, простая лексика, перевод каждой реплики.\n"
     "   — Средний/продвинутый (B1+: связные предложения, мало ошибок): длиннее"
-    " фразы, идиомы, разговорная речь, обсуждения тем (работа, жизнь в Венгрии,"
+    " фразы, идиомы, разговорная речь, обсуждения темы (работа, жизнь в Венгрии,"
     " новости). Перевод давай только для сложных слов или опускай.\n"
     "   Если не уверена в уровне — задай простой вопрос, чтобы проверить.\n"
     "2. Веди ролевые сценки (магазин, кафе, метро, врач, аптека, оформление"
@@ -105,8 +106,8 @@ SYSTEM_PROMPT = (
     " Если реплик несколько, разделяй их символом '###'. Для продвинутого"
     " ученика перевод после '|||' может быть коротким (только сложные слова)."
     " Никогда не придумывай перевод вроде 'Учитель проверяет'.\n"
-    "8. Держи образ Réka: живая, с юмором, строгая в меру. Не пиши длинные"
-    " лекции, не больше 3 реплик за раз.\n"
+    "8. Держи образ Réka: живая, с юмором, строгая в меру. Не длинные лекции,"
+    " не больше 3 реплик за раз.\n"
     "9. Если просишь ученика что-то написать или ответить, готовую фразу-образец"
     " давай на венгерском, внутри венгерской части реплики (например:"
     " Válaszolj így: ...). Русский перевод идёт только после '|||'. Не"
@@ -142,13 +143,12 @@ def clear_history(user_id):
 def get_history(user_id):
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
-  # Берём только последние HISTORY_LIMIT сообщений
   cursor.execute(
       "SELECT role, content FROM messages WHERE user_id = ? "
       "ORDER BY rowid DESC LIMIT ?",
       (user_id, HISTORY_LIMIT),
   )
-  rows = cursor.fetchall()[::-1]  # обратно в хронологический порядок
+  rows = cursor.fetchall()[::-1]
   conn.close()
 
   history = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -204,7 +204,6 @@ def escape_markdown_v2(text):
 
 
 def send_reply(chat_id, reply_text):
-  """Разбирает ответ на реплики ('###') и отправляет каждую отдельным сообщением."""
   for part in reply_text.split("###"):
     part = part.strip()
     if not part:
@@ -223,20 +222,54 @@ def send_reply(chat_id, reply_text):
 
 
 def is_help_request(text):
-  """Русский текст с просьбой о помощи."""
   low = text.lower()
   return bool(CYRILLIC.search(text)) and any(w in low for w in HELP_WORDS)
 
 
 def is_greeting(text):
-  """Короткое приветствие по-русски."""
   low = text.lower().strip(" !.,?")
   return len(low) <= 25 and any(low.startswith(g) for g in GREETINGS)
 
 
 def is_plain_russian(text):
-  """Русский текст без просьбы о помощи."""
   return bool(CYRILLIC.search(text)) and not is_help_request(text)
+
+
+# Проактивная рассылка (утро в 10:00, день в 14:00, вечер в 20:00)
+def send_proactive_message(time_of_day):
+  users = get_all_users()
+  if not users:
+    return
+
+  prompts = {
+      "morning": (
+          "Jó reggelt! Hogy aludtál? Készülj fel, ma keményen tanulunk magyarul!"
+          " Mivel indítod a napot? Válaszolj így: Kávéval és ... ||| Доброе"
+          " утро! Как спалось? Готовься, сегодня мы будем упорно учить"
+          " венгерский! С чего начинаешь день? Ответь так: С кофе и ..."
+      ),
+      "afternoon": (
+          "HÉ! Hol tartasz a teendőkkel? Mesélj, mit csinálsz éppen? Írd meg"
+          " magyarul! (Pl.: Dolgozom / Tanulok). ||| ЭЙ! Как продвигаются дела?"
+          " Расскажи, что ты сейчас делаешь? Напиши по-венгерски! (Напр.: Я"
+          " работаю / Учусь)."
+      ),
+      "evening": (
+          "Itt az este! Milyen volt a napod? Sikerült valami újat tanulnod"
+          " magyarul? Válaszolj: Igen, ... vagy Nem. ||| Вот и вечер! Каким"
+          " был твой день? Удалось узнать что-то новое по-венгерски? Ответь:"
+          " Да, ... или Нет."
+      ),
+  }
+
+  text_to_send = prompts.get(time_of_day, prompts["afternoon"])
+
+  for user_id in users:
+    try:
+      save_message(user_id, "assistant", text_to_send)
+      send_reply(user_id, text_to_send)
+    except Exception as e:
+      print(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
 
 
 @bot.message_handler(commands=["reset", "start"])
@@ -253,8 +286,6 @@ def handle_message(message):
   if not text:
     return
 
-  # Русский без просьбы о помощи: готовый ответ без модели.
-  # Пишем его в историю, чтобы на следующее "помоги" Réka помнила, о чём речь.
   if is_greeting(text) or is_plain_russian(text):
     reply = GREETING_REPLY if is_greeting(text) else RUSSIAN_REPLY
     save_message(user_id, "user", text)
@@ -273,7 +304,6 @@ def handle_message(message):
   save_message(user_id, "user", text)
   history = get_history(user_id)
 
-  # Просьба о помощи: подсказка модели только для этого запроса, в базу не пишем
   if is_help_request(text):
     history[-1]["content"] = text + HELP_HINT
 
@@ -296,11 +326,22 @@ def handle_message(message):
     print(f"Ошибка при обращении к AI: {e}")
 
 
+# Настройка планировщика рассылок (10:00, 14:00, 20:00)
 scheduler = BackgroundScheduler()
-# Активные сообщения пока отключим, чтобы не спамили во время тестов
+
+scheduler.add_job(
+    send_proactive_message, "cron", hour=10, minute=0, args=["morning"]
+)
+scheduler.add_job(
+    send_proactive_message, "cron", hour=14, minute=0, args=["afternoon"]
+)
+scheduler.add_job(
+    send_proactive_message, "cron", hour=20, minute=0, args=["evening"]
+)
+
 scheduler.start()
 
-print("Réka запущена и готова к работе...")
+print("Réka запущена, расписание рассылок активировано...")
 
 while True:
   try:
