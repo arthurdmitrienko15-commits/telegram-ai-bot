@@ -16,48 +16,6 @@ client = Groq(api_key=GROQ_API_KEY)
 
 HISTORY_LIMIT = 30
 
-CYRILLIC = re.compile(r"[а-яёА-ЯЁ]")
-HELP_WORDS = (
-    "помоги",
-    "помощь",
-    "не понимаю",
-    "не знаю",
-    "что значит",
-    "перевед",
-    "подскажи",
-    "как сказать",
-    "объясни",
-    "с нуля",
-    "help",
-    "don't understand",
-    "translate",
-)
-GREETINGS = (
-    "привет",
-    "здравствуй",
-    "здорово",
-    "хай",
-    "хей",
-    "добрый день",
-    "добрый вечер",
-    "доброе утро",
-    "hello",
-    "hi",
-    "szia",
-    "jó napot",
-)
-
-DAILY_WORDS = [
-    ("egészségére", "to health / bless you"),
-    ("szépen", "beautifully / nicely"),
-    ("biztosan", "surely / certainly"),
-    ("pillanat", "moment / minute"),
-    ("lépés", "step"),
-    ("kávézó", "cafe"),
-    ("ugyanis", "namely / the fact is"),
-    ("szükség", "necessity / need"),
-]
-
 WELCOME_TEXT = (
     "Szia! I am Réka, 21 years old, from Budapest. 🇭🇺\n\n"
     "I am a virtual Hungarian teacher (AI, not a real human), but strictly professional. 😄\n\n"
@@ -77,14 +35,25 @@ BASE_SYSTEM_PROMPT = (
     "   — Beginner (A1–A2: one-word answers, many mistakes, asks for help): very "
     "short phrases, simple vocabulary, translation of every line in {lang_name}.\n"
     "   — Intermediate/Advanced (B1+): longer phrases, idioms, colloquial speech. Provide translation only for difficult words or omit it.\n"
-    "2. Roleplay scenes (shop, cafe, metro, doctor, pharmacy) or live conversation. Alternate questions.\n"
+    "2. Roleplay scenes (shop, cafe, metro, doctor, pharmacy) or live conversation. Alternate questions (Mit csinálsz? Miért?).\n"
     "3. CORRECTIONS: if there are real grammar mistakes, correct them.\n"
     "4. If the student asks for help in {lang_name} or says 'Nem tudom': don't scold. Give "
     "the translation and 2-3 sample answers in Hungarian.\n"
     "5. FORMAT: each line strictly in the format [Hungarian text] ||| [Translation in {lang_name}]. "
-    "The '|||' separator is MANDATORY. If there are multiple lines, separate them with '###'.\n"
+    "The '|||' separator is MANDATORY for each line so the translation goes into a spoiler. If there are multiple lines, separate them with '###'.\n"
     "6. Keep Réka's persona: lively, humorous, moderately strict. No long lectures, max 3 lines at a time."
 )
+
+DAILY_WORDS = [
+    ("egészségére", "to health / bless you"),
+    ("szépen", "beautifully / nicely"),
+    ("biztosan", "surely / certainly"),
+    ("pillanat", "moment / minute"),
+    ("lépés", "step"),
+    ("kávézó", "cafe"),
+    ("ugyanis", "namely / the fact is"),
+    ("szükség", "necessity / need"),
+]
 
 
 def init_db():
@@ -240,9 +209,6 @@ def escape_markdown_v2(text):
 
 
 def send_reply(chat_id, reply_text):
-  hu_parts = []
-  ru_parts = []
-
   for part in reply_text.split("###"):
     part = part.strip()
     if not part:
@@ -253,24 +219,14 @@ def send_reply(chat_id, reply_text):
     else:
       hu, ru = part, ""
 
-    if hu:
-      hu_parts.append(hu)
+    msg = escape_markdown_v2(hu)
     if ru:
-      ru_parts.append(ru)
+      msg += f"\n\n||{escape_markdown_v2('Translation: ' + ru)}||"
 
-  # Собираем весь венгерский текст сверху
-  full_hu = "\n\n".join(hu_parts)
-  msg = escape_markdown_v2(full_hu)
-
-  # Если есть переводы, собираем их и прячем под один спойлер в самом низу
-  if ru_parts:
-    full_ru = "\n".join(ru_parts)
-    msg += f"\n\n||{escape_markdown_v2('Translation:\n' + full_ru)}||"
-
-  bot.send_message(chat_id=chat_id, text=msg, parse_mode="MarkdownV2")
+    bot.send_message(chat_id=chat_id, text=msg, parse_mode="MarkdownV2")
 
 
-def send_proactive_message(time_of_day):
+def send_proactive_message(slot_name):
   users = get_all_users()
   if not users:
     return
@@ -278,24 +234,28 @@ def send_proactive_message(time_of_day):
   for user_id in users:
     try:
       hu, ru, count = get_or_set_user_word(user_id)
+      
+      # Первые 4 раза присылаем слово с переводом
       if count <= 4:
         text_to_send = (
-            f"Gyakoroljunk! Word of the day (#{count}/5): *{hu}* — {ru}. "
-            f"Make a sentence with it in Hungarian! ||| Let's practice! Word"
-            f" of the day (#{count}/5): {hu} — {ru}. Make a sentence in Hungarian!"
+            f"Szia! Reminder for today (#{count}/4): *{hu}* — {ru}. "
+            f"Hogy telik a napod? Write a sentence with it! ||| "
+            f"Привет! Напоминание на сегодня (#{count}/4): {hu} — {ru}. "
+            f"Как проходит твой день? Напиши с ним предложение!"
         )
       else:
+        # На 5-й раз (вечером) — проверка без перевода слова
         text_to_send = (
-            f"Ismétlés a tudás atyja! 🧠 What is the translation of *{hu}*? "
-            f"Write a translation and an example sentence in Hungarian! ||| Practice"
-            f" makes perfect! 🧠 What is the translation of {hu}? Write a translation and"
-            f" an example sentence! Correct translation: {ru}"
+            f"Ismétlés a tudás atyja! 🧠 Do you remember the word we practiced? "
+            f"What is the meaning of *{hu}*? Write a sentence in Hungarian! ||| "
+            f"Повторение — мать учения! 🧠 Ты помнишь слово, которое мы учили? "
+            f"Какой у него перевод для слова {hu}? Напиши предложение на венгерском! Правильный перевод: {ru}"
         )
 
       save_message(user_id, "assistant", text_to_send)
       send_reply(user_id, text_to_send)
     except Exception as e:
-      print(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+      print(f"Не удалось отправить проактивное сообщение пользователю {user_id}: {e}")
 
 
 @bot.message_handler(commands=["reset", "start"])
@@ -352,16 +312,12 @@ def handle_message(message):
     print(f"Ошибка при обращении к AI: {e}")
 
 
+# Настройка расписания рассылок на день (4 раза: утро, день, вечер, ночь/проверка)
 scheduler = BackgroundScheduler()
-scheduler.add_job(
-    send_proactive_message, "cron", hour=10, minute=0, args=["morning"]
-)
-scheduler.add_job(
-    send_proactive_message, "cron", hour=14, minute=0, args=["afternoon"]
-)
-scheduler.add_job(
-    send_proactive_message, "cron", hour=20, minute=0, args=["evening"]
-)
+scheduler.add_job(send_proactive_message, "cron", hour=9, minute=0, args=["morning"])
+scheduler.add_job(send_proactive_message, "cron", hour=13, minute=0, args=["day"])
+scheduler.add_job(send_proactive_message, "cron", hour=17, minute=0, args=["evening"])
+scheduler.add_job(send_proactive_message, "cron", hour=21, minute=0, args=["night_check"])
 scheduler.start()
 
 print("Réka запущена, расписание рассылок активировано...")
