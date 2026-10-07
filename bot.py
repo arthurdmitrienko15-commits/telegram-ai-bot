@@ -5,7 +5,6 @@ import sqlite3
 import time
 from apscheduler.schedulers.background import BackgroundScheduler
 import telebot
-from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 from groq import Groq
 
 # Читаем ключи из переменных окружения
@@ -48,7 +47,6 @@ GREETINGS = (
     "jó napot",
 )
 
-# Список полезных слов для тренировки (венгерский + английский по умолчанию, либо подстраивается)
 DAILY_WORDS = [
     ("egészségére", "to health / bless you"),
     ("szépen", "beautifully / nicely"),
@@ -63,8 +61,8 @@ DAILY_WORDS = [
 WELCOME_TEXT = (
     "Szia! I am Réka, 21 years old, from Budapest. 🇭🇺\n\n"
     "I am a virtual Hungarian teacher (AI, not a real human), but strictly professional. 😄\n\n"
-    "Memory cleared, starting with a clean slate. Write something to me in Hungarian, for example: «Szia Réka!»\n\n"
-    "Please choose the language you prefer for explanations and translations:"
+    "Memory cleared, starting with a clean slate.\n\n"
+    "Please write in what language you prefer to receive explanations and translations (e.g. *Russian*, *Ukrainian*, *English*, *German*, etc.):"
 )
 
 BASE_SYSTEM_PROMPT = (
@@ -78,8 +76,7 @@ BASE_SYSTEM_PROMPT = (
     "1. LEVEL. Assess the student's level yourself from their first messages and adapt.\n"
     "   — Beginner (A1–A2: one-word answers, many mistakes, asks for help): very "
     "short phrases, simple vocabulary, translation of every line in {lang_name}.\n"
-    "   — Intermediate/Advanced (B1+: connected sentences, few mistakes): longer "
-    "phrases, idioms, colloquial speech. Provide translation only for difficult words or omit it.\n"
+    "   — Intermediate/Advanced (B1+): longer phrases, idioms, colloquial speech. Provide translation only for difficult words or omit it.\n"
     "2. Roleplay scenes (shop, cafe, metro, doctor, pharmacy) or live conversation. Alternate questions.\n"
     "3. CORRECTIONS: if there are real grammar mistakes, correct them.\n"
     "4. If the student asks for help in {lang_name} or says 'Nem tudom': don't scold. Give "
@@ -103,12 +100,11 @@ def init_db():
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
-            language TEXT DEFAULT 'English'
+            language TEXT DEFAULT 'pending'
         )
     """)
-  # Добавим колонку language на случай, если таблица уже существовала без неё
   try:
-    cursor.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'English'")
+    cursor.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'pending'")
   except sqlite3.OperationalError:
     pass
 
@@ -131,7 +127,7 @@ def register_user(user_id):
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
   cursor.execute(
-      "INSERT OR IGNORE INTO users (user_id, language) VALUES (?, 'English')", (user_id,)
+      "INSERT OR IGNORE INTO users (user_id, language) VALUES (?, 'pending')", (user_id,)
   )
   conn.commit()
   conn.close()
@@ -153,13 +149,13 @@ def get_user_language(user_id):
   cursor.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
   row = cursor.fetchone()
   conn.close()
-  return row[0] if row and row[0] else "English"
+  return row[0] if row and row[0] else "pending"
 
 
 def get_all_users():
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
-  cursor.execute("SELECT user_id FROM users")
+  cursor.execute("SELECT user_id FROM users WHERE language != 'pending'")
   rows = cursor.fetchall()
   conn.close()
   return [row[0] for row in rows]
@@ -269,8 +265,6 @@ def send_proactive_message(time_of_day):
   for user_id in users:
     try:
       hu, ru, count = get_or_set_user_word(user_id)
-      lang = get_user_language(user_id)
-
       if count <= 4:
         text_to_send = (
             f"Gyakoroljunk! Word of the day (#{count}/5): *{hu}* — {ru}. "
@@ -296,39 +290,10 @@ def send_welcome(message):
   user_id = message.from_user.id
   register_user(user_id)
   clear_history(user_id)
-
-  markup = InlineKeyboardMarkup()
-  markup.row(
-      InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_Russian"),
-      InlineKeyboardButton("🇺🇦 Українська", callback_data="lang_Ukrainian"),
-  )
-  markup.row(
-      InlineKeyboardButton("🇬🇧 English", callback_data="lang_English")
-  )
-
-  bot.send_message(message.chat.id, WELCOME_TEXT, reply_markup=markup)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("lang_"))
-def handle_language_selection(call):
-  user_id = call.from_user.id
-  selected_lang = call.data.split("_")[1]
-  set_user_language(user_id, selected_lang)
-
-  confirmation_texts = {
-      "Russian": "Отлично! Теперь я буду давать пояснения и перевод на **русском** языке. Напиши мне что-нибудь по-венгерски!",
-      "Ukrainian": "Чудово! Тепер я надаватиму пояснення та переклад українською мовою. Напиши мені щось угорською!",
-      "English": "Great! Now I will provide explanations and translations in **English**. Write something to me in Hungarian!",
-  }
-
-  text = confirmation_texts.get(selected_lang, "Language updated!")
-  bot.answer_callback_query(call.id)
-  bot.edit_message_text(
-      chat_id=call.message.chat.id,
-      message_id=call.message.message_id,
-      text=text,
-  )
-  save_message(user_id, "assistant", text + " ||| " + text)
+  
+  # Сбрасываем статус языка на 'pending', чтобы первое сообщение пользователя записалось как язык
+  set_user_language(user_id, 'pending')
+  bot.send_message(message.chat.id, WELCOME_TEXT)
 
 
 @bot.message_handler(func=lambda message: True)
@@ -339,6 +304,15 @@ def handle_message(message):
     return
 
   register_user(user_id)
+  lang = get_user_language(user_id)
+
+  # Если язык еще не выбран, то первое сообщение пользователя — это выбор языка
+  if lang == 'pending':
+    set_user_language(user_id, text)
+    conf_text = f"Perfect! I've set your preference to **{text}**. Now write something to me in Hungarian, for example: «Szia Réka!»"
+    bot.send_message(message.chat.id, conf_text, parse_mode="Markdown")
+    save_message(user_id, "assistant", conf_text + " ||| " + conf_text)
+    return
 
   try:
     bot.send_chat_action(message.chat.id, "typing")
