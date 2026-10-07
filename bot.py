@@ -1,13 +1,11 @@
 import os
 import random
-import re
 import sqlite3
 import time
 from apscheduler.schedulers.background import BackgroundScheduler
 import telebot
 from groq import Groq
 
-# Читаем ключи из переменных окружения
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -18,9 +16,8 @@ HISTORY_LIMIT = 30
 
 WELCOME_TEXT = (
     "Szia! I am Réka, 21 years old, from Budapest. 🇭🇺\n\n"
-    "I am a virtual Hungarian teacher (AI, not a real human), but strictly professional. 😄\n\n"
-    "Memory cleared, starting with a clean slate.\n\n"
-    "Please write in what language you prefer to receive explanations and translations (e.g. *Russian*, *Ukrainian*, *English*, *German*, etc.):"
+    "I am your virtual Hungarian teacher. Write to me in any language you prefer "
+    "(Russian, Ukrainian, English, etc.), and let's practice!"
 )
 
 BASE_SYSTEM_PROMPT = (
@@ -29,19 +26,17 @@ BASE_SYSTEM_PROMPT = (
     "demanding, don't forgive laziness, but joke around, encourage and celebrate "
     "student successes. You love Budapest: tram 4–6, cafes, lángos, walks on "
     "Margit-sziget, and sometimes briefly share 'about your day' to keep the "
-    "conversation alive. Student's preferred explanation/translation language is: {lang_name}.\n\n"
+    "conversation alive.\n\n"
     "RULES:\n"
-    "1. LEVEL. Assess the student's level yourself from their first messages and adapt.\n"
-    "   — Beginner (A1–A2: one-word answers, many mistakes, asks for help): very "
-    "short phrases, simple vocabulary, translation of every line in {lang_name}.\n"
-    "   — Intermediate/Advanced (B1+): longer phrases, idioms, colloquial speech. Provide translation only for difficult words or omit it.\n"
-    "2. Roleplay scenes (shop, cafe, metro, doctor, pharmacy) or live conversation. Alternate questions (Mit csinálsz? Miért?).\n"
-    "3. CORRECTIONS: if there are real grammar mistakes, correct them.\n"
-    "4. If the student asks for help in {lang_name} or says 'Nem tudom': don't scold. Give "
-    "the translation and 2-3 sample answers in Hungarian.\n"
-    "5. FORMAT: each line strictly in the format [Hungarian text] ||| [Translation in {lang_name}]. "
-    "The '|||' separator is MANDATORY for each line so the translation goes into a spoiler. If there are multiple lines, separate them with '###'.\n"
-    "6. Keep Réka's persona: lively, humorous, moderately strict. No long lectures, max 3 lines at a time."
+    "1. LANGUAGE DETECTION: Detect the user's preferred language (Russian, Ukrainian, English, etc.) "
+    "from their messages and explain/translate in that exact language. Never force a specific language.\n"
+    "2. LEVEL: Assess the student's level and adapt. Beginner (A1–A2): short phrases, "
+    "simple vocabulary, translate lines. Intermediate+ (B1+): longer phrases, colloquial speech.\n"
+    "3. Keep the conversation natural. If the user writes Hungarian words or answers your questions, "
+    "don't scold them — support the dialogue.\n"
+    "4. FORMAT: each line strictly in the format [Hungarian text] ||| [Translation in user's language]. "
+    "The '|||' separator is MANDATORY so the translation goes into a spoiler. If multiple lines, separate with '###'.\n"
+    "5. Keep Réka's persona: lively, humorous, moderately strict. Max 3 lines at a time."
 )
 
 DAILY_WORDS = [
@@ -67,17 +62,6 @@ def init_db():
         )
     """)
   cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            language TEXT DEFAULT 'pending'
-        )
-    """)
-  try:
-    cursor.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'pending'")
-  except sqlite3.OperationalError:
-    pass
-
-  cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_words (
             user_id INTEGER PRIMARY KEY,
             word_hu TEXT,
@@ -90,44 +74,6 @@ def init_db():
 
 
 init_db()
-
-
-def register_user(user_id):
-  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute(
-      "INSERT OR IGNORE INTO users (user_id, language) VALUES (?, 'pending')", (user_id,)
-  )
-  conn.commit()
-  conn.close()
-
-
-def set_user_language(user_id, lang_name):
-  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute(
-      "UPDATE users SET language = ? WHERE user_id = ?", (lang_name, user_id)
-  )
-  conn.commit()
-  conn.close()
-
-
-def get_user_language(user_id):
-  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
-  row = cursor.fetchone()
-  conn.close()
-  return row[0] if row and row[0] else "pending"
-
-
-def get_all_users():
-  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute("SELECT user_id FROM users WHERE language != 'pending'")
-  rows = cursor.fetchall()
-  conn.close()
-  return [row[0] for row in rows]
 
 
 def get_or_set_user_word(user_id):
@@ -171,9 +117,6 @@ def clear_history(user_id):
 
 
 def get_history(user_id):
-  lang = get_user_language(user_id)
-  system_prompt = BASE_SYSTEM_PROMPT.format(lang_name=lang)
-
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
   cursor.execute(
@@ -184,7 +127,7 @@ def get_history(user_id):
   rows = cursor.fetchall()[::-1]
   conn.close()
 
-  history = [{"role": "system", "content": system_prompt}]
+  history = [{"role": "system", "content": BASE_SYSTEM_PROMPT}]
   for role, content in rows:
     history.append({"role": role, "content": content})
   return history
@@ -221,13 +164,18 @@ def send_reply(chat_id, reply_text):
 
     msg = escape_markdown_v2(hu)
     if ru:
-      msg += f"\n\n||{escape_markdown_v2('Translation: ' + ru)}||"
+      msg += f"\n\n||{escape_markdown_v2(ru)}||"
 
     bot.send_message(chat_id=chat_id, text=msg, parse_mode="MarkdownV2")
 
 
 def send_proactive_message(slot_name):
-  users = get_all_users()
+  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
+  cursor = conn.cursor()
+  cursor.execute("SELECT DISTINCT user_id FROM messages")
+  users = [row[0] for row in cursor.fetchall()]
+  conn.close()
+
   if not users:
     return
 
@@ -235,36 +183,33 @@ def send_proactive_message(slot_name):
     try:
       hu, ru, count = get_or_set_user_word(user_id)
       
-      # Первые 4 раза присылаем слово с переводом
+      # 4 раза присылаем слово с переводом
       if count <= 4:
         text_to_send = (
-            f"Szia! Reminder for today (#{count}/4): *{hu}* — {ru}. "
-            f"Hogy telik a napod? Write a sentence with it! ||| "
-            f"Привет! Напоминание на сегодня (#{count}/4): {hu} — {ru}. "
+            f"Szia! Napi szó (#{count}/4): *{hu}* — {ru}. "
+            f"Hogy telik a napod? Írj egy mondatot vele! ||| "
+            f"Привет! Слово дня (#{count}/4): {hu} — {ru}. "
             f"Как проходит твой день? Напиши с ним предложение!"
         )
       else:
-        # На 5-й раз (вечером) — проверка без перевода слова
+        # На 5-й раз — проверка без перевода слова
         text_to_send = (
-            f"Ismétlés a tudás atyja! 🧠 Do you remember the word we practiced? "
-            f"What is the meaning of *{hu}*? Write a sentence in Hungarian! ||| "
-            f"Повторение — мать учения! 🧠 Ты помнишь слово, которое мы учили? "
-            f"Какой у него перевод для слова {hu}? Напиши предложение на венгерском! Правильный перевод: {ru}"
+            f"Ismétlés a tudás atyja! 🧠 Emlékszel a szóra? "
+            f"Mit jelent a *{hu}*? Írj egy mondatot magyarul! ||| "
+            f"Повторение — мать учения! 🧠 Помнишь слово? "
+            f"Какой перевод у слова {hu}? Напиши предложение на венгерском! (Подсказка: {ru})"
         )
 
       save_message(user_id, "assistant", text_to_send)
       send_reply(user_id, text_to_send)
     except Exception as e:
-      print(f"Не удалось отправить проактивное сообщение пользователю {user_id}: {e}")
+      print(f"Ошибка проактивной рассылки для {user_id}: {e}")
 
 
 @bot.message_handler(commands=["reset", "start"])
 def send_welcome(message):
   user_id = message.from_user.id
-  register_user(user_id)
   clear_history(user_id)
-  
-  set_user_language(user_id, 'pending')
   bot.send_message(message.chat.id, WELCOME_TEXT)
 
 
@@ -273,16 +218,6 @@ def handle_message(message):
   user_id = message.from_user.id
   text = message.text
   if not text:
-    return
-
-  register_user(user_id)
-  lang = get_user_language(user_id)
-
-  if lang == 'pending':
-    set_user_language(user_id, text)
-    conf_text = f"Perfect! I've set your preference to **{text}**. Now write something to me in Hungarian, for example: «Szia Réka!»"
-    bot.send_message(message.chat.id, conf_text, parse_mode="Markdown")
-    save_message(user_id, "assistant", conf_text + " ||| " + conf_text)
     return
 
   try:
@@ -312,7 +247,7 @@ def handle_message(message):
     print(f"Ошибка при обращении к AI: {e}")
 
 
-# Настройка расписания рассылок на день (4 раза: утро, день, вечер, ночь/проверка)
+# Настройка расписания рассылок (4 раза в день)
 scheduler = BackgroundScheduler()
 scheduler.add_job(send_proactive_message, "cron", hour=9, minute=0, args=["morning"])
 scheduler.add_job(send_proactive_message, "cron", hour=13, minute=0, args=["day"])
