@@ -240,6 +240,9 @@ def escape_markdown_v2(text):
 
 
 def send_reply(chat_id, reply_text):
+  hu_parts = []
+  ru_parts = []
+
   for part in reply_text.split("###"):
     part = part.strip()
     if not part:
@@ -250,11 +253,21 @@ def send_reply(chat_id, reply_text):
     else:
       hu, ru = part, ""
 
-    msg = escape_markdown_v2(hu)
+    if hu:
+      hu_parts.append(hu)
     if ru:
-      msg += f"\n\n||{escape_markdown_v2('Translation: ' + ru)}||"
+      ru_parts.append(ru)
 
-    bot.send_message(chat_id=chat_id, text=msg, parse_mode="MarkdownV2")
+  # Собираем весь венгерский текст сверху
+  full_hu = "\n\n".join(hu_parts)
+  msg = escape_markdown_v2(full_hu)
+
+  # Если есть переводы, собираем их и прячем под один спойлер в самом низу
+  if ru_parts:
+    full_ru = "\n".join(ru_parts)
+    msg += f"\n\n||{escape_markdown_v2('Translation:\n' + full_ru)}||"
+
+  bot.send_message(chat_id=chat_id, text=msg, parse_mode="MarkdownV2")
 
 
 def send_proactive_message(time_of_day):
@@ -291,7 +304,6 @@ def send_welcome(message):
   register_user(user_id)
   clear_history(user_id)
   
-  # Сбрасываем статус языка на 'pending', чтобы первое сообщение пользователя записалось как язык
   set_user_language(user_id, 'pending')
   bot.send_message(message.chat.id, WELCOME_TEXT)
 
@@ -306,7 +318,6 @@ def handle_message(message):
   register_user(user_id)
   lang = get_user_language(user_id)
 
-  # Если язык еще не выбран, то первое сообщение пользователя — это выбор языка
   if lang == 'pending':
     set_user_language(user_id, text)
     conf_text = f"Perfect! I've set your preference to **{text}**. Now write something to me in Hungarian, for example: «Szia Réka!»"
