@@ -40,6 +40,18 @@ GREETINGS = (
     "доброе утро",
 )
 
+# Список полезных слов для тренировки (венгерский + русский)
+DAILY_WORDS = [
+    ("egészségére", "на здоровье / будь здоров"),
+    ("szépen", "красиво / прекрасно"),
+    ("biztosan", "обязательно / наверняка"),
+    ("pillanat", "момент / минутка"),
+    ("lépés", "шаг"),
+    ("kávézó", "кафе"),
+    ("ugyanis", "ведь / дело в том, что"),
+    ("szükség", "необходимость / нужно"),
+]
+
 # Ответ на приветствие по-русски: мягкое знакомство
 GREETING_REPLY = (
     "Szia! Én Réka vagyok. Hogy hívnak? Válaszolj így: Szia Réka! A nevem ..."
@@ -123,6 +135,15 @@ def init_db():
             user_id INTEGER PRIMARY KEY
         )
     """)
+  # Таблица для отслеживания ежедневных слов пользователя
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_words (
+            user_id INTEGER PRIMARY KEY,
+            word_hu TEXT,
+            word_ru TEXT,
+            count INTEGER
+        )
+    """)
   conn.commit()
   conn.close()
 
@@ -147,6 +168,43 @@ def get_all_users():
   rows = cursor.fetchall()
   conn.close()
   return [row[0] for row in rows]
+
+
+def get_or_set_user_word(user_id):
+  """Управляет словом дня для юзера: повторяет 4 раза с переводом, на 5-й раз срывает перевод."""
+  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
+  cursor = conn.cursor()
+  cursor.execute(
+      "SELECT word_hu, word_ru, count FROM user_words WHERE user_id = ?",
+      (user_id,),
+  )
+  row = cursor.fetchone()
+
+  if not row:
+    # Выбираем новое случайное слово
+    hu, ru = random.choice(DAILY_WORDS)
+    count = 1
+    cursor.execute(
+        "INSERT INTO user_words (user_id, word_hu, word_ru, count) VALUES (?,"
+        " ?, ?, ?)",
+        (user_id, hu, ru, count),
+    )
+  else:
+    hu, ru, count = row
+    count += 1
+    if count > 5:
+      # После 5-го раза меняем слово на новое и сбрасываем счетчик на 1
+      hu, ru = random.choice(DAILY_WORDS)
+      count = 1
+    cursor.execute(
+        "UPDATE user_words SET word_hu = ?, word_ru = ?, count = ? WHERE"
+        " user_id = ?",
+        (hu, ru, count, user_id),
+    )
+
+  conn.commit()
+  conn.close()
+  return hu, ru, count
 
 
 def clear_history(user_id):
@@ -244,31 +302,27 @@ def send_proactive_message(time_of_day):
   if not users:
     return
 
-  prompts = {
-      "morning": (
-          "Jó reggelt! Hogy aludtál? Készülj fel, ma keményen tanulunk magyarul!"
-          " Mivel indítod a napot? Válaszolj így: Kávéval és ... ||| Доброе"
-          " утро! Как спалось? Готовься, сегодня мы будем упорно учить"
-          " венгерский! С чего начинаешь день? Ответь так: С кофе и ..."
-      ),
-      "afternoon": (
-          "HÉ! Hol tartasz a teendőkkel? Mesélj, mit csinálsz éppen? Írd meg"
-          " magyarul! (Pl.: Dolgozom / Tanulok). ||| ЭЙ! Как продвигаются дела?"
-          " Расскажи, что ты сейчас делаешь? Напиши по-венгерски! (Напр.: Я"
-          " работаю / Учусь)."
-      ),
-      "evening": (
-          "Itt az este! Milyen volt a napod? Sikerült valami újat tanulnod"
-          " magyarul? Válaszolj: Igen, ... vagy Nem. ||| Вот и вечер! Каким"
-          " был твой день? Удалось узнать что-то новое по-венгерски? Ответь:"
-          " Да, ... или Нет."
-      ),
-  }
-
-  text_to_send = prompts.get(time_of_day, prompts["afternoon"])
-
   for user_id in users:
     try:
+      hu, ru, count = get_or_set_user_word(user_id)
+
+      if count <= 4:
+        # Первые 4 раза показываем слово с переводом
+        text_to_send = (
+            f"Gyakoroljunk! Слово дня (#{count}/5): *{hu}* — {ru}. "
+            f"Составь с ним предложение по-венгерски! ||| Тренируемся! Слово"
+            f" дня (#{count}/5): {hu} — {ru}. Составь с ним предложение"
+            f" по-венгерски!"
+        )
+      else:
+        # 5-й раз: без перевода, ученик должен сам догадаться и написать перевод
+        text_to_send = (
+            f"Ismétlés a tudás atyja! 🧠 Каков перевод слова *{hu}*? "
+            f"Напиши перевод и пример предложения по-венгерски! ||| Повторение"
+            f" — мать учения! 🧠 Каков перевод слова {hu}? Напиши перевод и"
+            f" пример предложения по-венгерски!"
+        )
+
       save_message(user_id, "assistant", text_to_send)
       send_reply(user_id, text_to_send)
     except Exception as e:
