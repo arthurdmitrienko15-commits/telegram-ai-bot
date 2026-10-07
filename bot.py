@@ -5,6 +5,7 @@ import sqlite3
 import time
 from apscheduler.schedulers.background import BackgroundScheduler
 import telebot
+from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 from groq import Groq
 
 # Читаем ключи из переменных окружения
@@ -28,6 +29,9 @@ HELP_WORDS = (
     "как сказать",
     "объясни",
     "с нуля",
+    "help",
+    "don't understand",
+    "translate",
 )
 GREETINGS = (
     "привет",
@@ -38,78 +42,51 @@ GREETINGS = (
     "добрый день",
     "добрый вечер",
     "доброе утро",
+    "hello",
+    "hi",
+    "szia",
+    "jó napot",
 )
 
-# Список полезных слов для тренировки (венгерский + русский)
+# Список полезных слов для тренировки (венгерский + английский по умолчанию, либо подстраивается)
 DAILY_WORDS = [
-    ("egészségére", "на здоровье / будь здоров"),
-    ("szépen", "красиво / прекрасно"),
-    ("biztosan", "обязательно / наверняка"),
-    ("pillanat", "момент / минутка"),
-    ("lépés", "шаг"),
-    ("kávézó", "кафе"),
-    ("ugyanis", "ведь / дело в том, что"),
-    ("szükség", "необходимость / нужно"),
+    ("egészségére", "to health / bless you"),
+    ("szépen", "beautifully / nicely"),
+    ("biztosan", "surely / certainly"),
+    ("pillanat", "moment / minute"),
+    ("lépés", "step"),
+    ("kávézó", "cafe"),
+    ("ugyanis", "namely / the fact is"),
+    ("szükség", "necessity / need"),
 ]
 
-# Ответ на приветствие по-русски: мягкое знакомство
-GREETING_REPLY = (
-    "Szia! Én Réka vagyok. Hogy hívnak? Válaszolj így: Szia Réka! A nevem ..."
-    " (a neved). ||| Привет! Я Рéка. Как тебя зовут? Ответь так: Szia Réka! A"
-    " nevem ... (твоё имя)."
-)
-
 WELCOME_TEXT = (
-    "Szia! Réka vagyok, 21 éves, budapesti. 🇭🇺\n\n"
-    "Я виртуальная учительница венгерского (ИИ, не живой человек), "
-    "но строгая по-настоящему. 😄\n\n"
-    "Память очищена, начинаем с чистого листа. Напиши мне что-нибудь "
-    "по-венгерски, например: «Szia Réka!»\n\n"
-    "Уровень определю сама, по твоим ответам. 😉"
+    "Szia! I am Réka, 21 years old, from Budapest. 🇭🇺\n\n"
+    "I am a virtual Hungarian teacher (AI, not a real human), but strictly professional. 😄\n\n"
+    "Memory cleared, starting with a clean slate. Write something to me in Hungarian, for example: «Szia Réka!»\n\n"
+    "Please choose the language you prefer for explanations and translations:"
 )
 
-SYSTEM_PROMPT = (
-    "Ты — Réka (Рéка), виртуальная учительница венгерского языка, ИИ-персонаж. "
-    "Тебе 21 год, ты живёшь в Будапеште. Характер: строгая, но весёлая. "
-    "Требовательная, не прощаешь лень, но шутишь, подбадриваешь и радуешься"
-    " успехам ученика. Ты любишь Будапешт: трамвай 4–6, кафе, lángos, прогулки по"
-    " Margit-sziget, и иногда коротко рассказываешь 'про свой день', чтобы"
-    " разговор был живым. Ученик — русскоязычный. Ты не флиртуешь и не играешь"
-    " роль романтической партнёрши: ты учитель. Если ученик спрашивает, человек"
-    " ли ты, честно говори, что ты виртуальная учительница на основе ИИ.\n\n"
-    "ПРАВИЛА:\n"
-    "1. УРОВЕНЬ. Сама определяй уровень ученика по его первым сообщениям и подстраивайся.\n"
-    "   — Новичок (A1–A2: односложные ответы, много ошибок, просит помощи): очень"
-    " короткие фразы, простая лексика, перевод каждой реплики.\n"
-    "   — Средний/продвинутый (B1+: связные предложения, мало ошибок): длиннее"
-    " фразы, идиомы, разговорная речь, обсуждения темы (работа, жизнь в Венгрии,"
-    " новости). Перевод давай только для сложных слов или опускай.\n"
-    "   Если не уверена в уровне — задай простой вопрос, чтобы проверить.\n"
-    "2. Веди ролевые сценки (магазин, кафе, метро, врач, аптека, оформление"
-    " документов) или живой разговор. Чередуй вопросы и открытые"
-    " вопросы (Mit csinálsz? Miért?). Никогда не пиши глупости вроде того, что"
-    " кола бывает негазированной — следи за логикой напитков и еды (кола всегда"
-    " газированная, бывает обычной или без сахара / light).\n"
-    "3. ИСПРАВЛЕНИЯ: если в ответе ученика есть реальные грамматические ошибки"
-    " (падежи, окончания, пропущенные диакритики), исправляй их. НО если ученик"
-    " называет блюдо или напиток (например, Gyros, Cola, Pizza) в ответ на твой"
-    " вопрос, **никогда** не придирайся к тому, что это не чисто венгерское слово!"
-    " Это нормальная еда в Будапеште. Принимай такие ответы с юмором.\n"
-    "4. Если ученик пишет 'Nem tudom' или просит помощи по-русски: не ругай. Дай"
-    " перевод вопроса и 2–3 варианта ответа на венгерском.\n"
-    "5. Раз в 3–4 реплики давай микро-грамматику только по реальной ошибке ученика,"
-    " а не на пустом месте.\n"
-    "6. Перед отправкой проверь свой венгерский: падежи (-t, -ba/-be, -ban/-ben),"
-    " артикли, глагольные формы, гармония гласных. Пиши только то, в чём уверена"
-    " на 100%. Лучше простая верная фраза, чем сложная с ошибкой.\n"
-    "7. ФОРМАТ: каждая реплика строго вида [венгерский текст] ||| [русский перевод]."
-    " Разделение через '|||' ОБЯЗАТЕЛЬНО для каждой реплики, чтобы русский текст"
-    " уходил под спойлер. Если реплик несколько, разделяй их символом '###'.\n"
-    "8. Держи образ Réka: живая, с юмором, строгая в меру. Не длинные лекции,"
-    " не больше 3 реплик за раз.\n"
-    "9. Если просишь ученика что-то написать или ответить, готовую фразу-образец"
-    " давай на венгерском, внутри венгерской части реплики (например:"
-    " Válaszolj így: ...). Русский перевод идёт строго после '|||'."
+BASE_SYSTEM_PROMPT = (
+    "You are Réka, a virtual Hungarian language teacher and AI character. "
+    "You are 21 years old, living in Budapest. Character: strict but cheerful, "
+    "demanding, don't forgive laziness, but joke around, encourage and celebrate "
+    "student successes. You love Budapest: tram 4–6, cafes, lángos, walks on "
+    "Margit-sziget, and sometimes briefly share 'about your day' to keep the "
+    "conversation alive. Student's preferred explanation/translation language is: {lang_name}.\n\n"
+    "RULES:\n"
+    "1. LEVEL. Assess the student's level yourself from their first messages and adapt.\n"
+    "   — Beginner (A1–A2: one-word answers, many mistakes, asks for help): very "
+    "short phrases, simple vocabulary, translation of every line in {lang_name}.\n"
+    "   — Intermediate/Advanced (B1+: connected sentences, few mistakes): longer "
+    "phrases, idioms, colloquial speech. Provide translation only for difficult words or omit it.\n"
+    "2. Roleplay scenes (shop, cafe, metro, doctor, pharmacy) or live conversation. Alternate questions.\n"
+    "3. CORRECTIONS: if there are real grammar mistakes, correct them.\n"
+    "4. If the student asks for help in {lang_name} or says 'Nem tudom': don't scold. Give "
+    "the translation and 2-3 sample answers in Hungarian.\n"
+    "5. FORMAT: each line strictly in the format [Hungarian text] ||| [Translation in {lang_name}]. "
+    "The '|||' separator is MANDATORY. If there are multiple lines, separate them with '###'.\n"
+    "6. Keep Réka's persona: lively, humorous, moderately strict. No long lectures, max 3 lines at a time."
 )
 
 
@@ -125,9 +102,16 @@ def init_db():
     """)
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY
+            user_id INTEGER PRIMARY KEY,
+            language TEXT DEFAULT 'English'
         )
     """)
+  # Добавим колонку language на случай, если таблица уже существовала без неё
+  try:
+    cursor.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'English'")
+  except sqlite3.OperationalError:
+    pass
+
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_words (
             user_id INTEGER PRIMARY KEY,
@@ -147,10 +131,29 @@ def register_user(user_id):
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
   cursor.execute(
-      "INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,)
+      "INSERT OR IGNORE INTO users (user_id, language) VALUES (?, 'English')", (user_id,)
   )
   conn.commit()
   conn.close()
+
+
+def set_user_language(user_id, lang_name):
+  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
+  cursor = conn.cursor()
+  cursor.execute(
+      "UPDATE users SET language = ? WHERE user_id = ?", (lang_name, user_id)
+  )
+  conn.commit()
+  conn.close()
+
+
+def get_user_language(user_id):
+  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
+  cursor = conn.cursor()
+  cursor.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+  row = cursor.fetchone()
+  conn.close()
+  return row[0] if row and row[0] else "English"
 
 
 def get_all_users():
@@ -163,7 +166,6 @@ def get_all_users():
 
 
 def get_or_set_user_word(user_id):
-  """Управляет словом дня: 4 раза с переводом, на 5-й раз без перевода (перевод пишет бот)."""
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
   cursor.execute(
@@ -176,8 +178,7 @@ def get_or_set_user_word(user_id):
     hu, ru = random.choice(DAILY_WORDS)
     count = 1
     cursor.execute(
-        "INSERT INTO user_words (user_id, word_hu, word_ru, count) VALUES (?,"
-        " ?, ?, ?)",
+        "INSERT INTO user_words (user_id, word_hu, word_ru, count) VALUES (?, ?, ?, ?)",
         (user_id, hu, ru, count),
     )
   else:
@@ -187,8 +188,7 @@ def get_or_set_user_word(user_id):
       hu, ru = random.choice(DAILY_WORDS)
       count = 1
     cursor.execute(
-        "UPDATE user_words SET word_hu = ?, word_ru = ?, count = ? WHERE"
-        " user_id = ?",
+        "UPDATE user_words SET word_hu = ?, word_ru = ?, count = ? WHERE user_id = ?",
         (hu, ru, count, user_id),
     )
 
@@ -206,6 +206,9 @@ def clear_history(user_id):
 
 
 def get_history(user_id):
+  lang = get_user_language(user_id)
+  system_prompt = BASE_SYSTEM_PROMPT.format(lang_name=lang)
+
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
   cursor.execute(
@@ -216,7 +219,7 @@ def get_history(user_id):
   rows = cursor.fetchall()[::-1]
   conn.close()
 
-  history = [{"role": "system", "content": SYSTEM_PROMPT}]
+  history = [{"role": "system", "content": system_prompt}]
   for role, content in rows:
     history.append({"role": role, "content": content})
   return history
@@ -234,26 +237,7 @@ def save_message(user_id, role, content):
 
 
 def escape_markdown_v2(text):
-  special_chars = [
-      "_",
-      "*",
-      "[",
-      "]",
-      "(",
-      ")",
-      "~",
-      "`",
-      ">",
-      "#",
-      "+",
-      "-",
-      "=",
-      "|",
-      "{",
-      "}",
-      ".",
-      "!",
-  ]
+  special_chars = ["_", "*", "[", "]", "(", ")", "~", "`", ">", "#", "+", "-", "=", "|", "{", "}", ".", "!"]
   for char in special_chars:
     text = text.replace(char, f"\\{char}")
   return text
@@ -265,31 +249,16 @@ def send_reply(chat_id, reply_text):
     if not part:
       continue
 
-    # Строго разделяем венгерскую часть и перевод по |||
     if "|||" in part:
       hu, ru = [s.strip() for s in part.split("|||", 1)]
     else:
-      # Если ИИ вдруг забыл |||, считаем весь текст венгерским без спойлера
       hu, ru = part, ""
 
-    # Венгерский текст выводим открыто
     msg = escape_markdown_v2(hu)
-
-    # А вот перевод оборачиваем в спойлер ||...||
     if ru:
-      msg += f"\n\n||{escape_markdown_v2('Перевод: ' + ru)}||"
+      msg += f"\n\n||{escape_markdown_v2('Translation: ' + ru)}||"
 
     bot.send_message(chat_id=chat_id, text=msg, parse_mode="MarkdownV2")
-
-
-def is_help_request(text):
-  low = text.lower()
-  return bool(CYRILLIC.search(text)) and any(w in low for w in HELP_WORDS)
-
-
-def is_greeting(text):
-  low = text.lower().strip(" !.,?")
-  return len(low) <= 25 and any(low.startswith(g) for g in GREETINGS)
 
 
 def send_proactive_message(time_of_day):
@@ -300,22 +269,20 @@ def send_proactive_message(time_of_day):
   for user_id in users:
     try:
       hu, ru, count = get_or_set_user_word(user_id)
+      lang = get_user_language(user_id)
 
       if count <= 4:
-        # Первые 4 раза — со словом и переводом
         text_to_send = (
-            f"Gyakoroljunk! Слово дня (#{count}/5): *{hu}* — {ru}. "
-            f"Составь с ним предложение по-венгерски! ||| Тренируемся! Слово"
-            f" дня (#{count}/5): {hu} — {ru}. Составь с ним предложение"
-            f" по-венгерски!"
+            f"Gyakoroljunk! Word of the day (#{count}/5): *{hu}* — {ru}. "
+            f"Make a sentence with it in Hungarian! ||| Let's practice! Word"
+            f" of the day (#{count}/5): {hu} — {ru}. Make a sentence in Hungarian!"
         )
       else:
-        # 5-й раз — без перевода в тексте, бот дает правильный перевод под спойлером
         text_to_send = (
-            f"Ismétlés a tudás atyja! 🧠 Каков перевод слова *{hu}*? "
-            f"Напиши перевод и пример предложения по-венгерски! ||| Повторение"
-            f" — мать учения! 🧠 Каков перевод слова {hu}? Напиши перевод и"
-            f" пример предложения по-венгерски! Правильный перевод: {ru}"
+            f"Ismétlés a tudás atyja! 🧠 What is the translation of *{hu}*? "
+            f"Write a translation and an example sentence in Hungarian! ||| Practice"
+            f" makes perfect! 🧠 What is the translation of {hu}? Write a translation and"
+            f" an example sentence! Correct translation: {ru}"
         )
 
       save_message(user_id, "assistant", text_to_send)
@@ -329,7 +296,39 @@ def send_welcome(message):
   user_id = message.from_user.id
   register_user(user_id)
   clear_history(user_id)
-  bot.send_message(message.chat.id, WELCOME_TEXT)
+
+  markup = InlineKeyboardMarkup()
+  markup.row(
+      InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_Russian"),
+      InlineKeyboardButton("🇺🇦 Українська", callback_data="lang_Ukrainian"),
+  )
+  markup.row(
+      InlineKeyboardButton("🇬🇧 English", callback_data="lang_English")
+  )
+
+  bot.send_message(message.chat.id, WELCOME_TEXT, reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("lang_"))
+def handle_language_selection(call):
+  user_id = call.from_user.id
+  selected_lang = call.data.split("_")[1]
+  set_user_language(user_id, selected_lang)
+
+  confirmation_texts = {
+      "Russian": "Отлично! Теперь я буду давать пояснения и перевод на **русском** языке. Напиши мне что-нибудь по-венгерски!",
+      "Ukrainian": "Чудово! Тепер я надаватиму пояснення та переклад українською мовою. Напиши мені щось угорською!",
+      "English": "Great! Now I will provide explanations and translations in **English**. Write something to me in Hungarian!",
+  }
+
+  text = confirmation_texts.get(selected_lang, "Language updated!")
+  bot.answer_callback_query(call.id)
+  bot.edit_message_text(
+      chat_id=call.message.chat.id,
+      message_id=call.message.message_id,
+      text=text,
+  )
+  save_message(user_id, "assistant", text + " ||| " + text)
 
 
 @bot.message_handler(func=lambda message: True)
@@ -341,16 +340,6 @@ def handle_message(message):
 
   register_user(user_id)
 
-  if is_greeting(text):
-    reply = GREETING_REPLY
-    save_message(user_id, "user", text)
-    save_message(user_id, "assistant", reply)
-    try:
-      send_reply(message.chat.id, reply)
-    except Exception as e:
-      print(f"Ошибка отправки: {e}")
-    return
-
   try:
     bot.send_chat_action(message.chat.id, "typing")
   except Exception:
@@ -358,15 +347,6 @@ def handle_message(message):
 
   save_message(user_id, "user", text)
   history = get_history(user_id)
-
-  if is_help_request(text) or bool(CYRILLIC.search(text)):
-    history[-1]["content"] = (
-        text
-        + "\n\n[Ученик написал по-русски или попросил помощи. Ответь как строгая, но"
-        " заботливая учительница Réka: мягко напомни по-венгерски, что мы учим"
-        " язык здесь, дай перевод его слова и подскажи, как это сказать по-венгерски,"
-        " продолжи диалог]."
-    )
 
   try:
     completion = client.chat.completions.create(
@@ -378,7 +358,7 @@ def handle_message(message):
 
     reply_text = (completion.choices[0].message.content or "").strip()
     if not reply_text:
-      reply_text = "Magyarul, kérlek! ||| По-венгерски, пожалуйста!"
+      reply_text = "Magyarul, kérlek! ||| In Hungarian, please!"
 
     save_message(user_id, "assistant", reply_text)
     send_reply(message.chat.id, reply_text)
