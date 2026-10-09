@@ -31,7 +31,6 @@ SYSTEM_PROMPT = (
     "3. Никогда не повторяй слова ученика слепо, веди диалог и проверяй формы глаголов."
 )
 
-# База глаголов для тренировки (инфинитив и перевод)
 VERBS_DATABASE = [
     ("csinál", "делать"),
     ("olvas", "читать"),
@@ -70,7 +69,6 @@ def init_db():
             count INTEGER
         )
     """)
-  # Таблица для отслеживания шагов тренировки глаголов (глагол и текущий шаг от 1 до 5)
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS verb_training (
             user_id INTEGER PRIMARY KEY,
@@ -207,10 +205,36 @@ def send_reply(chat_id, reply_text):
       bot.send_message(chat_id=chat_id, text=f"{hu}\n\n({ru})")
 
 
+def send_proactive_message(slot_name):
+  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
+  cursor = conn.cursor()
+  cursor.execute("SELECT DISTINCT user_id FROM messages")
+  users = [row[0] for row in cursor.fetchall()]
+  conn.close()
+
+  if not users:
+    return
+
+  for user_id in users:
+    try:
+      hu, ru, count = get_or_set_user_word(user_id)
+
+      if count <= 4:
+        text_to_send = f"{hu} — {ru} ||| {hu} — {ru}"
+      else:
+        text_to_send = (
+            f"{hu} —  ||| Напиши перевод для слова {hu} (Правильный ответ: {ru})"
+        )
+
+      save_message(user_id, "assistant", text_to_send)
+      send_reply(user_id, text_to_send)
+    except Exception as e:
+      print(f"Ошибка проактивной рассылки для {user_id}: {e}")
+
+
 @bot.message_handler(commands=["verbs"])
 def choose_verbs(message):
   user_id = message.from_user.id
-  # Выбираем 3 случайных глагола для кнопок
   selected = random.sample(VERBS_DATABASE, 3)
   markup = InlineKeyboardMarkup()
   for hu, ru in selected:
@@ -234,7 +258,6 @@ def handle_verb_choice(call):
 
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
-  # Записываем выбранный глагол и обнуляем шаг (начинаем с 1)
   cursor.execute(
       "INSERT OR REPLACE INTO verb_training (user_id, verb_hu, verb_ru, step)"
       " VALUES (?, ?, ?, 1)",
@@ -244,7 +267,6 @@ def handle_verb_choice(call):
   conn.close()
 
   bot.answer_callback_query(call.id, text=f"Выбран глагол: {hu} ({ru})")
-  # Шаг 1: Написать инфинитив / значение (делать?)
   text = (
       f"Kezdjük! 1. lépés: Как будет инфинитив (делать?) для глагола *{ru}*? ||| "
       f"Начнем! Шаг 1: Как будет инфинитив (делать?) для глагола «{ru}»?"
@@ -272,7 +294,6 @@ def handle_message(message):
   except Exception:
     pass
 
-  # Проверяем, идет ли у пользователя активная тренировка глаголов
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
   cursor.execute(
@@ -287,8 +308,8 @@ def handle_message(message):
 
     if step == 2:
       reply_text = (
-          f"Helyes! 2. lépés: Напиши форму для 3-го лица ед. числа ((он/она делает) "
-          f"для глагола *{hu}*). ||| Правильно! Шаг 2: Напиши форму "
+          f"Helyes! 2. lépés: Напиши форму для 3-го лица ед. числа (он/она делает) "
+          f"для глагола *{hu}*. ||| Правильно! Шаг 2: Напиши форму "
           f"для 3-го лица ед. числа (он/она делает)."
       )
     elif step == 3:
@@ -326,7 +347,6 @@ def handle_message(message):
 
   conn.close()
 
-  # Стандартная логика общения, если тренировка не запущена
   save_message(user_id, "user", text)
   history = get_history(user_id)
 
@@ -349,7 +369,6 @@ def handle_message(message):
     print(f"Ошибка при обращении к AI: {e}")
 
 
-# Настройка расписания рассылок (4 раза в день)
 scheduler = BackgroundScheduler()
 scheduler.add_job(
     send_proactive_message, "cron", hour=9, minute=0, args=["morning"]
@@ -365,7 +384,7 @@ scheduler.add_job(
 )
 scheduler.start()
 
-print("Réka запущена с системой выбора глаголов по кнопкам...")
+print("Réka запущена и работает стабильно...")
 
 while True:
   try:
