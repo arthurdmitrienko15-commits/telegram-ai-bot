@@ -3,15 +3,11 @@ import random
 import time
 import telebot
 from telebot.types import KeyboardButton, ReplyKeyboardMarkup
-from groq import Groq
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-client = Groq(api_key=GROQ_API_KEY)
 
-# Храним состояние тренировки: {user_id: {"verb": "ír", "ru": "писать", "step": 1}}
+# Храним состояние тренировки: {user_id: {"verb": "iszik", "ru": "пить", "step": 1}}
 active_trainings = {}
 
 VERBS_DATABASE = [
@@ -24,32 +20,6 @@ VERBS_DATABASE = [
     ("hall", "слышать"),
     ("vesz", "брать / покупать"),
 ]
-
-STEP_QUESTIONS = {
-    1: (
-        "1. lépés: Mi az infinitive a(z) *{ru}* igéhez? (pl. -ni végződés)\n\n||Шаг"
-        " 1: Какая инфинитивная форма (начальная с суффиксом -ni) у глагола"
-        " «{ru}»?||"
-    ),
-    2: (
-        "2. lépés: Írd le a 3. személy egyes számú (ő) alakot a(z) *{hu}*"
-        " igéhez.\n\n||Шаг 2: Напиши форму 3-го лица ед. числа (он/она — ő) для"
-        " глагола «{hu}».||"
-    ),
-    3: (
-        "3. lépés: Hogyan kérdezed meg: «Mit csinálsz?» ehhez az"
-        " igéhez?\n\n||Шаг 3: Как спросить «Что ты делаешь?» используя этот"
-        " глагол?||"
-    ),
-    4: (
-        "4. lépés: Írd le az 1. személy egyes számú (én) alakot: *{hu}*.\n\n||Шаг"
-        " 4: Напиши форму для 1-го лица ед. числа (я — én) с этим глаголом.||"
-    ),
-    5: (
-        "5. lépés (utolsó): Fordítsd le: «Ő most ezt csinálja».\n\n||Шаг 5"
-        " (последний): Переведи предложение: «Он/она сейчас делает это».||"
-    ),
-}
 
 
 def get_verbs_keyboard():
@@ -86,6 +56,19 @@ def escape_markdown_v2(text):
   return text
 
 
+def send_reply(chat_id, hu_text, ru_text):
+  """Отправляет сообщение строго со спойлером через |||"""
+  msg = escape_markdown_v2(hu_text)
+  if ru_text:
+    msg += f"\n\n||{escape_markdown_v2(ru_text)}||"
+
+  try:
+    bot.send_message(chat_id=chat_id, text=msg, parse_mode="MarkdownV2")
+  except Exception as e:
+    print(f"Ошибка MarkdownV2: {e}")
+    bot.send_message(chat_id=chat_id, text=f"{hu_text}\n\n({ru_text})")
+
+
 @bot.message_handler(commands=["start", "reset", "verbs"])
 def cmd_start(message):
   user_id = message.from_user.id
@@ -120,11 +103,14 @@ def handle_all_messages(message):
         "ru": found_ru,
         "step": 1,
     }
-    q_text = STEP_QUESTIONS[1].format(hu=found_verb, ru=found_ru)
-    bot.send_message(message.chat.id, q_text, parse_mode="Markdown")
+    send_reply(
+        message.chat.id,
+        f"1. lépés: Mi az infinitive (csinálni?) a(z) *{found_hu}* ({found_ru}) igénél?",
+        f"Шаг 1: Какая инфинитивная форма (делать?) у глагола «{found_ru}»?",
+    )
     return
 
-  # 2. Если пользователь в процессе тренировки — двигаем шаг по любому его ответу
+  # 2. Если в процессе тренировки — двигаем шаги по порядку
   if user_id in active_trainings:
     data = active_trainings[user_id]
     data["step"] += 1
@@ -132,15 +118,35 @@ def handle_all_messages(message):
     hu = data["verb"]
     ru = data["ru"]
 
-    if step <= 5:
-      q_text = STEP_QUESTIONS[step].format(hu=hu, ru=ru)
-      bot.send_message(message.chat.id, q_text, parse_mode="Markdown")
+    if step == 2:
+      send_reply(
+          message.chat.id,
+          f"2. lépés: Írd le a 3. személy egyes számú (ő) alakot a(z) *{hu}* igéhez.",
+          f"Шаг 2: Напиши форму 3-го лица ед. числа (он/она делает) для глагола «{ru}».",
+      )
+    elif step == 3:
+      send_reply(
+          message.chat.id,
+          f"3. lépés: Hogyan kérdezed meg: «Mit csinálsz?» ehhez az igéhez?",
+          f"Шаг 3: Как спросить «Что ты делаешь?» с этим глаголом?",
+      )
+    elif step == 4:
+      send_reply(
+          message.chat.id,
+          f"4. lépés: Írd le az 1. személy egyes számú (én) alakot: *{hu}*.",
+          f"Шаг 4: Напиши форму 1-го лица ед. числа (я делаю) с этим глаголом.",
+      )
+    elif step == 5:
+      send_reply(
+          message.chat.id,
+          f"5. lépés (utolsó): Fordítsd le: «Ő most ezt csinálja» a(z) *{hu}* igével.",
+          f"Шаг 5 (последний): Переведи предложение: «Он/она сейчас делает это» (с этим глаголом).",
+      )
     else:
       del active_trainings[user_id]
       bot.send_message(
           message.chat.id,
           "Szép munka! Sikeresen teljesítetted mind az 5 lépést! 🎉",
-          parse_mode="Markdown",
       )
       bot.send_message(
           message.chat.id,
@@ -157,7 +163,7 @@ def handle_all_messages(message):
   )
 
 
-print("Réka запущена в идеальном пошаговом режиме...")
+print("Réka запущена со стабильными спойлерами...")
 
 while True:
   try:
