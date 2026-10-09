@@ -7,7 +7,7 @@ from telebot.types import KeyboardButton, ReplyKeyboardMarkup
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# Храним состояние: {user_id: {"verb_hu": "csinál", "verb_ru": "делать", "step": 1}}
+# Храним состояние: {user_id: {"verb_hu": "eszik", "verb_ru": "есть", "step": 1}}
 active_trainings = {}
 
 VERBS_DATABASE = [
@@ -109,11 +109,27 @@ def handle_all_messages(message):
     elif step == 2:
       correct = hu
     elif step == 3:
-      correct = "mit csinálsz?"
+      # Формируем правильный вопрос для Шага 3 в зависимости от глагола
+      if hu == "eszik":
+        correct = "mit eszel?"
+      elif hu == "iszik":
+        correct = "mit iszol?"
+      elif hu == "ír":
+        correct = "mit írsz?"
+      elif hu == "olvas":
+        correct = "mit olvasol?"
+      elif hu == "lát":
+        correct = "mit látsz?"
+      elif hu == "hall":
+        correct = "mit hallasz?"
+      elif hu == "vesz":
+        correct = "mit veszel?"
+      else:
+        correct = "mit csinálsz?"
     else:
       correct = ""
 
-    # Проверяем ответ (смягченно: если введенный текст совпадает или содержит правильный ответ)
+    # Проверяем ответ
     if correct in text or text in correct:
       data["step"] += 1
       next_step = data["step"]
@@ -125,10 +141,25 @@ def handle_all_messages(message):
             hu,
         )
       elif next_step == 3:
+        # Динамически генерируем вопрос «Что ты [глагол]?» под конкретный глагол
+        if hu == "eszik":
+          step3_q = "Как спросить «Что ты ешь?» с этим глаголом?"
+          step3_ans = "Mit eszel?"
+        elif hu == "iszik":
+          step3_q = "Как спросить «Что ты пьешь?» с этим глаголом?"
+          step3_ans = "Mit iszol?"
+        elif hu == "ír":
+          step3_q = "Как спросить «Что ты пишешь?» с этим глаголом?"
+          step3_ans = "Mit írsz?"
+        elif hu == "olvas":
+          step3_q = "Как спросить «Что ты читаешь?» с этим глаголом?"
+          step3_ans = "Mit olvasol?"
+        else:
+          step3_q = f"Как спросить «Что ты делаешь?» с этим глаголом?"
+          step3_ans = "Mit csinálsz?"
+
         send_reply(
-            message.chat.id,
-            f"Отлично! 🔥\n\nШаг 3: Как спросить «Что ты делаешь?» с этим глаголом?",
-            "Mit csinálsz?",
+            message.chat.id, f"Отлично! 🔥\n\nШаг 3: {step3_q}", step3_ans
         )
       else:
         del active_trainings[user_id]
@@ -138,15 +169,26 @@ def handle_all_messages(message):
             reply_markup=get_verbs_keyboard(),
         )
     else:
-      # Если ошиблись — мягко просим попробовать еще раз, не сдвигая шаг
+      # Ошибка — повторяем шаг с подсказкой
+      if step == 1:
+        spoiler = (
+            "enni"
+            if hu == "eszik"
+            else ("inni" if hu == "iszik" else ("venni" if hu == "vesz" else hu + "ni"))
+        )
+      elif step == 2:
+        spoiler = hu
+      else:
+        spoiler = correct
+
       send_reply(
           message.chat.id,
           f"Не совсем так. Попробуй еще раз для глагола «{ru}»:",
-          correct,
+          spoiler,
       )
     return
 
-  # 2. Если тренировки нет — проверяем выбор глагола из кнопок
+  # 2. Если тренировки нет — выбираем глагол
   found_hu = None
   found_ru = None
   for hu, ru in VERBS_DATABASE:
@@ -178,7 +220,6 @@ def handle_all_messages(message):
     )
     return
 
-  # 3. Если пишет левый текст вне тренировки
   bot.send_message(
       message.chat.id,
       "Давай потренируемся! Выбери глагол для тренировки с помощью кнопок внизу:",
@@ -186,7 +227,7 @@ def handle_all_messages(message):
   )
 
 
-print("Река запущена с жесткой и честной логикой проверки...")
+print("Река запущена с точными вопросами под каждый глагол...")
 
 while True:
   try:
