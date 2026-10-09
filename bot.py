@@ -11,7 +11,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 client = Groq(api_key=GROQ_API_KEY)
 
-# Состояние тренировки: {user_id: {"verb": "hall", "ru": "слышать", "step": 1}}
+# Храним состояние тренировки: {user_id: {"verb": "esik", "ru": "есть", "step": 1}}
 active_trainings = {}
 
 VERBS_DATABASE = [
@@ -25,18 +25,6 @@ VERBS_DATABASE = [
     ("vesz", "брать / покупать"),
 ]
 
-STEP_QUESTIONS = {
-    1: (
-        "1. lépés: Как будет инфинитив (начальная форма «делать?») для глагола *{ru}*?"
-    ),
-    2: (
-        "2. lépés: Напиши форму 3-го лица ед. числа (он/она делает) для глагола *{hu}*."
-    ),
-    3: "3. lépés: Как спросить «Что ты делаешь?» используя этот глагол?",
-    4: "4. lépés: Напиши форму для «я делаю» с этим глаголом (*{hu}*).",
-    5: "5. lépés (последний): Переведи предложение: «Он/она сейчас делает это».",
-}
-
 
 def get_verbs_keyboard():
   selected = random.sample(VERBS_DATABASE, 3)
@@ -44,6 +32,45 @@ def get_verbs_keyboard():
   for hu, ru in selected:
     markup.add(KeyboardButton(text=f"{hu} ({ru})"))
   return markup
+
+
+def escape_markdown_v2(text):
+  special_chars = [
+      "_",
+      "*",
+      "[",
+      "]",
+      "(",
+      ")",
+      "~",
+      "`",
+      ">",
+      "#",
+      "+",
+      "-",
+      "=",
+      "|",
+      "{",
+      "}",
+      ".",
+      "!",
+  ]
+  for char in special_chars:
+    text = text.replace(char, f"\\{char}")
+  return text
+
+
+def send_reply(chat_id, hu_text, ru_text):
+  """Отправляет сообщение в жестком формате: венгерский текст + перевод под спойлером"""
+  msg = escape_markdown_v2(hu_text)
+  if ru_text:
+    msg += f"\n\n||{escape_markdown_v2(ru_text)}||"
+
+  try:
+    bot.send_message(chat_id=chat_id, text=msg, parse_mode="MarkdownV2")
+  except Exception as e:
+    print(f"Ошибка отправки MarkdownV2: {e}")
+    bot.send_message(chat_id=chat_id, text=f"{hu_text}\n\n({ru_text})")
 
 
 @bot.message_handler(commands=["start", "reset", "verbs"])
@@ -54,7 +81,7 @@ def cmd_start(message):
 
   bot.send_message(
       message.chat.id,
-      "Szia! Выбери глагол для тренировки с помощью кнопок внизу:",
+      "Szia! Válaszd ki a gyakorolni kívánt igét: / Выбери глагол для тренировки:",
       reply_markup=get_verbs_keyboard(),
   )
 
@@ -65,7 +92,7 @@ def handle_all_messages(message):
   text = message.text.strip()
   text_lower = text.lower()
 
-  # 1. Проверяем выбор глагола из меню
+  # 1. Проверяем выбор глагола из кнопок
   found_verb = None
   found_ru = None
   for hu, ru in VERBS_DATABASE:
@@ -80,78 +107,63 @@ def handle_all_messages(message):
         "ru": found_ru,
         "step": 1,
     }
-    bot.send_message(
-        message.chat.id, STEP_QUESTIONS[1].format(ru=found_ru), parse_mode="Markdown"
+    send_reply(
+        message.chat.id,
+        f"1. lépés: Mi az infinitive (csinálni?) a(z) *{found_ru}* igénél?",
+        f"Шаг 1: Какая инфинитивная форма (делать?) у глагола «{found_ru}»?",
     )
     return
 
-  # 2. Если пользователь в процессе тренировки
+  # 2. Если пользователь в процессе тренировки — двигаем шаг по любому его ответу
   if user_id in active_trainings:
     data = active_trainings[user_id]
+    data["step"] += 1
     step = data["step"]
     hu = data["verb"]
     ru = data["ru"]
 
-    # ИИ анализирует сообщение на любом языке (вопрос/помощь vs ответ)
-    prompt = (
-        f"Ты — Réka, строгая, но дружелюбная учительница венгерского языка (21 год, Будапешт).\n"
-        f"Ученик сейчас на шаге №{step} тренировки глагола '{hu}' ({ru}).\n"
-        f"Шаги:\n"
-        f"1: инфинитив\n"
-        f"2: 3-е лицо ед.ч. (он/она)\n"
-        f"3: вопрос 'Что ты делаешь?'\n"
-        f"4: 1-е лицо ед.ч. (я)\n"
-        f"5: перевод 'Он/она сейчас делает это'\n\n"
-        f"Ученик написал тебе на своем языке: '{text}'\n\n"
-        f"Инструкция:\n"
-        f"1. Если это ВОПРОС, просьба о помощи или непонятный термин (на любом языке — русском, английском, украинском и т.д.) — объясни правило на языке ученика, дай подсказку и попроси ответить еще раз. НЕ переходи к следующему шагу.\n"
-        f"2. Если это ОТВЕТ (попытка решить шаг) — оцени его, дай короткую обратную связь и обязательно напиши в конце ключевое слово 'NEXT_STEP', чтобы бот перешел к следующему шагу."
-    )
-
-    try:
-      completion = client.chat.completions.create(
-          model="openai/gpt-oss-20b",
-          messages=[{"role": "user", "content": prompt}],
-          temperature=0.3,
-          max_tokens=300,
+    if step == 2:
+      hu_q = f"2. lépés: Írd le a 3. személy egyes számú (ő) alakot a(z) *{hu}* igéhez."
+      ru_q = f"Шаг 2: Напиши форму 3-го лица ед. числа (он/она) для глагола «{hu}»."
+    elif step == 3:
+      hu_q = (
+          f"3. lépés: Hogyan kérdezed meg: «Mit csinálsz?» ehhez az igéhez?"
       )
-      ai_response = (completion.choices[0].message.content or "").strip()
-    except Exception as e:
-      ai_response = "NEXT_STEP"
-
-    # Если ИИ определил, что это ответ (есть метка NEXT_STEP)
-    if "NEXT_STEP" in ai_response:
-      clean_response = ai_response.replace("NEXT_STEP", "").strip()
-      if clean_response:
-        bot.send_message(message.chat.id, clean_response, parse_mode="Markdown")
-
-      data["step"] += 1
-      next_step = data["step"]
-
-      if next_step <= 5:
-        q_text = STEP_QUESTIONS[next_step].format(hu=hu, ru=ru)
-        bot.send_message(message.chat.id, q_text, parse_mode="Markdown")
-      else:
-        del active_trainings[user_id]
-        bot.send_message(
-            message.chat.id,
-            "Szép munka! Ты успешно прошел все 5 шагов! 🎉 Выбери новый глагол:",
-            reply_markup=get_verbs_keyboard(),
-        )
+      ru_q = f"Шаг 3: Как спросить «Что ты делаешь?» с этим глаголом?"
+    elif step == 4:
+      hu_q = f"4. lépés: Írd le az 1. személy egyes számú (én) alakot: *{hu}*."
+      ru_q = f"Шаг 4: Напиши форму для 1-го лица ед. числа (я) с этим глаголом."
+    elif step == 5:
+      hu_q = f"5. lépés (utolsó): Fordítsd le: «Ő most ezt csinálja»."
+      ru_q = (
+          f"Шаг 5 (последний): Переведи предложение: «Он/она сейчас делает это»."
+      )
     else:
-      # Ученик задал вопрос — отвечаем на его языке, шаг НЕ меняем
-      bot.send_message(message.chat.id, ai_response, parse_mode="Markdown")
+      del active_trainings[user_id]
+      bot.send_message(
+          message.chat.id,
+          "Szép munka! Sikeresen teljesítetted mind az 5 lépést! 🎉",
+          parse_mode="Markdown",
+      )
+      bot.send_message(
+          message.chat.id,
+          "Válassz egy új igét / Выбери новый глагол:",
+          reply_markup=get_verbs_keyboard(),
+      )
+      return
+
+    send_reply(message.chat.id, hu_q, ru_q)
     return
 
   # 3. Если вне тренировки
   bot.send_message(
       message.chat.id,
-      "Давай потренируемся! Выбери глагол для тренировки с помощью кнопок внизу:",
+      "Válassz egy igét a gyakorláshoz / Выбери глагол для тренировки:",
       reply_markup=get_verbs_keyboard(),
   )
 
 
-print("Река с многоязычной поддержкой запущена...")
+print("Réka запущена стабильно со спойлерами и без обрывов...")
 
 while True:
   try:
