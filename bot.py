@@ -17,8 +17,7 @@ HISTORY_LIMIT = 20
 
 WELCOME_TEXT = (
     "Szia! I am Réka, 21 years old, from Budapest. 🇭🇺\n\n"
-    "Я твоя виртуальная учительница венгерского. Давай потренируем глаголы! "
-    "Выбери глагол с помощью кнопок внизу экрана:"
+    "Я твоя виртуальная учительница венгерского. Выбери глагол для тренировки с помощью кнопок внизу:"
 )
 
 VERBS_DATABASE = [
@@ -174,7 +173,7 @@ def send_reply(chat_id, reply_text):
     try:
       bot.send_message(chat_id=chat_id, text=msg, parse_mode="MarkdownV2")
     except Exception as e:
-      print(f"Ошибка отправки сообщения: {e}")
+      print(f"Ошибка отправки сообщения (Markdown): {e}")
       bot.send_message(chat_id=chat_id, text=f"{hu}\n\n({ru})")
 
 
@@ -204,7 +203,6 @@ def send_proactive_message(slot_name):
 
 
 def get_verbs_keyboard():
-  # Берем 3 случайных глагола для клавиатуры
   selected = random.sample(VERBS_DATABASE, 3)
   markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
   for hu, ru in selected:
@@ -236,15 +234,15 @@ def handle_message(message):
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
 
-  # Проверяем, нажал ли пользователь глагол из клавиатуры (формат "hu (ru)")
-  selected_verb_data = None
+  # 1. Проверяем, выбрал ли пользователь глагол из клавиатуры
+  matched_verb = None
   for hu, ru in VERBS_DATABASE:
     if text.lower() == f"{hu} ({ru})".lower():
-      selected_verb_data = (hu, ru)
+      matched_verb = (hu, ru)
       break
 
-  if selected_verb_data:
-    hu, ru = selected_verb_data
+  if matched_verb:
+    hu, ru = matched_verb
     cursor.execute(
         "INSERT OR REPLACE INTO verb_training (user_id, verb_hu, verb_ru, step)"
         " VALUES (?, ?, ?, 1)",
@@ -261,7 +259,7 @@ def handle_message(message):
     send_reply(message.chat.id, reply_text)
     return
 
-  # Проверяем, идет ли активная тренировка шагов
+  # 2. Проверяем, идет ли активная тренировка шагов
   cursor.execute(
       "SELECT verb_hu, verb_ru, step FROM verb_training WHERE user_id = ?",
       (user_id,),
@@ -294,8 +292,8 @@ def handle_message(message):
       )
     else:
       reply_text = (
-          f"Szép munka! Ты прошел все 5 шагов для глагола *{hu}*! 🎉 "
-          f"Выбери новый глагол на клавиатуре ниже: ||| Отличная работа! Ты прошел все 5 шагов!"
+          f"Szép munka! Ты прошел все 5 шагов для глагола *{hu}*! 🎉 ||| "
+          f"Отличная работа! Ты прошел все 5 шагов!"
       )
       cursor.execute("DELETE FROM verb_training WHERE user_id = ?", (user_id,))
       save_message(user_id, "user", text)
@@ -323,7 +321,7 @@ def handle_message(message):
 
   conn.close()
 
-  # Если тренировка не запущена и пользователь пишет произвольный текст — предлагаем выбрать глагол кнопками
+  # 3. Если пользователь просто пишет произвольный текст вне тренировки
   bot.send_message(
       message.chat.id,
       "Давай потренируемся! Выбери глагол для тренировки с помощью кнопок внизу:",
@@ -346,7 +344,7 @@ scheduler.add_job(
 )
 scheduler.start()
 
-print("Réka запущена с надежными обычными кнопками...")
+print("Réka запущена и готова к работе...")
 
 while True:
   try:
