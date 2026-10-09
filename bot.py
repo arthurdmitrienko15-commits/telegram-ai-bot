@@ -3,15 +3,11 @@ import random
 import time
 import telebot
 from telebot.types import KeyboardButton, ReplyKeyboardMarkup
-from groq import Groq
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-client = Groq(api_key=GROQ_API_KEY)
 
-# Храним состояние: {user_id: {"verb_hu": "ír", "verb_ru": "писать", "step": 1}}
+# Храним состояние: {user_id: {"verb_hu": "iszik", "verb_ru": "пить", "step": 1}}
 active_trainings = {}
 
 VERBS_DATABASE = [
@@ -110,18 +106,16 @@ def handle_all_messages(message):
         "verb_ru": found_ru,
         "step": 1,
     }
-    # Шаг 1: Инфинитив. Под спойлером — только инфинитив с -ni (например, "írni" или "enni")
-    inf_word = (
-        found_hu + "ni"
-        if not found_hu.endswith("ik")
-        else found_hu.replace("ik", "ni")
-    )
+
+    # Вычисляем правильный инфинитив для подсказки
     if found_hu == "eszik":
       inf_word = "enni"
-    if found_hu == "iszik":
+    elif found_hu == "iszik":
       inf_word = "inni"
-    if found_hu == "vesz":
+    elif found_hu == "vesz":
       inf_word = "venni"
+    else:
+      inf_word = found_hu + "ni"
 
     send_reply(
         message.chat.id,
@@ -137,55 +131,32 @@ def handle_all_messages(message):
     hu = data["verb_hu"]
     ru = data["verb_ru"]
 
-    # Используем ИИ для оценки ответа и формирования следующего шага
-    prompt = (
-        f"Ты — Réka, строгая, но дружелюбная учительница венгерского языка. "
-        f"Глагол тренировки: '{hu}' ({ru}).\n"
-        f"Текущий шаг ученика: {step} из 3.\n"
-        f"- Шаг 1 был: Инфинитив\n"
-        f"- Шаг 2 сейчас: Форма 3-го лица ед.ч. (он/она делает?)\n"
-        f"- Шаг 3 сейчас: Вопрос 'Что ты делаешь?' (Mit csinálsz?)\n\n"
-        f"Ученик написал ответ: '{text}'\n\n"
-        f"Инструкция:\n"
-        f"1. Оцени его ответ на языке ученика (напиши коротко 'Правильно!' или исправь ошибку).\n"
-        f"2. Задай следующий вопрос (Шаг 2 или Шаг 3) на языке ученика.\n"
-        f"3. Если Шаг 3 пройден, поздравь ученика и предложи выбрать новый глагол.\n"
-        f"В самом конце ответа с новой строки напиши маркер: NEXT_STEP (если переходим дальше) или STAY (если ученик ошибся и нужно остаться)."
-    )
+    # Переходим к следующему шагу по любому твоему ответу (с похвалой)
+    data["step"] += 1
+    next_step = data["step"]
 
-    try:
-      completion = client.chat.completions.create(
-          model="openai/gpt-oss-20b",
-          messages=[{"role": "user", "content": prompt}],
-          temperature=0.3,
-          max_tokens=300,
+    if next_step == 2:
+      # Шаг 2: Он/она делает?
+      send_reply(
+          message.chat.id,
+          f"Правильно! 🎉\n\nШаг 2: Как будет «он / она делает» ({ru})?",
+          hu,
       )
-      ai_response = (completion.choices[0].message.content or "").strip()
-    except Exception:
-      ai_response = "Отлично! NEXT_STEP"
-
-    if "NEXT_STEP" in ai_response:
-      clean_text = ai_response.replace("NEXT_STEP", "").strip()
-      data["step"] += 1
-      next_step = data["step"]
-
-      if next_step == 2:
-        # Под спойлером только форма он/она (например, hu сам по себе для 3 лица)
-        spoiler_word = hu
-        send_reply(message.chat.id, f"{clean_text}\n\nШаг 2: Он/она делает?", spoiler_word)
-      elif next_step == 3:
-        spoiler_word = "Mit csinálsz?"
-        send_reply(message.chat.id, f"{clean_text}\n\nШаг 3: Что ты делаешь?", spoiler_word)
-      else:
-        del active_trainings[user_id]
-        bot.send_message(
-            message.chat.id,
-            f"{clean_text}\n\n🎉 Тренировка завершена! Выбери новый глагол:",
-            reply_markup=get_verbs_keyboard(),
-        )
+    elif next_step == 3:
+      # Шаг 3: Что ты делаешь?
+      send_reply(
+          message.chat.id,
+          f"Отлично! 🔥\n\nШаг 3: Как спросить «Что ты делаешь?» с этим глаголом?",
+          "Mit csinálsz?",
+      )
     else:
-      clean_text = ai_response.replace("STAY", "").strip()
-      send_reply(message.chat.id, clean_text, hu)
+      # Конец тренировки
+      del active_trainings[user_id]
+      bot.send_message(
+          message.chat.id,
+          "🎉 Молодчина! Все 3 шага пройдеы! Выбери новый глагол:",
+          reply_markup=get_verbs_keyboard(),
+      )
     return
 
   # 3. Если вне тренировки
@@ -196,7 +167,7 @@ def handle_all_messages(message):
   )
 
 
-print("Река запущена: чистые спойлеры без лишнего текста...")
+print("Река запущена с жесткой логикой без бреда от нейросети...")
 
 while True:
   try:
