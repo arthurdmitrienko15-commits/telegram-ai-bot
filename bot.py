@@ -17,8 +17,7 @@ HISTORY_LIMIT = 20
 
 WELCOME_TEXT = (
     "Szia! I am Réka, 21 years old, from Budapest. 🇭🇺\n\n"
-    "Я твоя виртуальная учительница венгерского. Давай потренируем глаголы! "
-    "Выбери глагол с помощью кнопок ниже:"
+    "Я твоя виртуальная учительница венгерского. Выбери глагол для тренировки:"
 )
 
 VERBS_DATABASE = [
@@ -207,19 +206,18 @@ def show_verbs_menu(chat_id):
   selected = random.sample(VERBS_DATABASE, 3)
   markup = InlineKeyboardMarkup()
   for hu, ru in selected:
+    # Делаем callback_data коротким и надежным
     markup.add(
         InlineKeyboardButton(
-            text=f"{hu} ({ru})", callback_data=f"verb_{hu}_{ru}"
+            text=f"{hu} ({ru})", callback_data=f"v_{hu}__{ru}"
         )
     )
   bot.send_message(
-      chat_id,
-      "Válassz egy igét a gyakorláshoz! / Выбери глагол для тренировки:",
-      reply_markup=markup,
+      chat_id, "Válassz egy igét / Выбери глагол:", reply_markup=markup
   )
 
 
-@bot.message_handler(commands=["verbs", "start", "reset"])
+@bot.message_handler(commands=["start", "reset", "verbs"])
 def cmd_start(message):
   user_id = message.from_user.id
   clear_history(user_id)
@@ -227,16 +225,19 @@ def cmd_start(message):
   show_verbs_menu(message.chat.id)
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("verb_"))
+@bot.callback_query_handler(func=lambda call: call.data.startswith("v_"))
 def handle_verb_choice(call):
-  # ЖЕСТКО гасим анимацию загрузки на кнопке, чтобы она не мигала
-  try:
-    bot.answer_callback_query(call.id)
-  except Exception:
-    pass
+  # Гасим часики загрузки на кнопке в самом начале
+  bot.answer_callback_query(call.id)
 
   user_id = call.from_user.id
-  _, hu, ru = call.data.split("_", 2)
+  try:
+    _, hu, ru = call.data.split("__", 2)
+  except Exception:
+    # Запасной вариант парсинга на случай сбоя
+    parts = call.data.split("_")
+    hu = parts[1]
+    ru = "глагол"
 
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
@@ -248,7 +249,6 @@ def handle_verb_choice(call):
   conn.commit()
   conn.close()
 
-  # Шаг 1
   text = (
       f"1. lépés: Как будет инфинитив (делать?) для глагола *{ru}*? ||| "
       f"Шаг 1: Как будет инфинитив (делать?) для глагола «{ru}»?"
@@ -312,7 +312,6 @@ def handle_message(message):
       send_reply(message.chat.id, reply_text)
       conn.commit()
       conn.close()
-      # Сразу автоматически предлагаем новые слова кнопками
       show_verbs_menu(message.chat.id)
       return
 
@@ -329,10 +328,9 @@ def handle_message(message):
 
   conn.close()
 
-  # Если тренировка не запущена, бот сам предлагает выбрать глагол через кнопки вместо лишних текстов
+  # Если тренировка не активна, принудительно предлагаем выбрать глагол кнопками
   bot.send_message(
-      message.chat.id,
-      "Давай потренируемся! Выбери глагол для тренировки:",
+      message.chat.id, "Давай потренируемся! Выбери глагол для тренировки:"
   )
   show_verbs_menu(message.chat.id)
 
@@ -352,7 +350,7 @@ scheduler.add_job(
 )
 scheduler.start()
 
-print("Réka запущена, инлайн-кнопки починены...")
+print("Réka запущена, кнопки пересозданы с надежным callback_data...")
 
 while True:
   try:
