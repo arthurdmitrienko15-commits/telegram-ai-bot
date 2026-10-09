@@ -2,7 +2,6 @@ import os
 import random
 import sqlite3
 import time
-from apscheduler.schedulers.background import BackgroundScheduler
 import telebot
 from telebot.types import KeyboardButton, ReplyKeyboardMarkup
 from groq import Groq
@@ -12,8 +11,6 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 client = Groq(api_key=GROQ_API_KEY)
-
-HISTORY_LIMIT = 20
 
 WELCOME_TEXT = (
     "Szia! I am Réka, 21 years old, from Budapest. 🇭🇺\n\n"
@@ -61,7 +58,6 @@ def get_verbs_keyboard():
 @bot.message_handler(commands=["start", "reset", "verbs"])
 def cmd_start(message):
   user_id = message.from_user.id
-  # Сбрасываем тренировку при рестарте
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
   cursor.execute("DELETE FROM verb_training WHERE user_id = ?", (user_id,))
@@ -76,17 +72,17 @@ def cmd_start(message):
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
   user_id = message.from_user.id
-  text = message.text.strip()
+  text = message.text.strip().lower()
   if not text:
     return
 
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
 
-  # 1. Проверяем, нажал ли пользователь глагол из меню
+  # Ищем, содержит ли сообщение венгерский глагол из нашей базы (по вхождению подстроки)
   matched_verb = None
   for hu, ru in VERBS_DATABASE:
-    if text.lower() == f"{hu} ({ru})".lower():
+    if hu in text:
       matched_verb = (hu, ru)
       break
 
@@ -103,10 +99,11 @@ def handle_message(message):
     bot.send_message(
         message.chat.id,
         f"1. lépés: Как будет инфинитив (делать?) для глагола *{ru}*?",
+        parse_mode="Markdown",
     )
     return
 
-  # 2. Проверяем текущий шаг активной тренировки
+  # Проверяем активный шаг тренировки
   cursor.execute(
       "SELECT verb_hu, verb_ru, step FROM verb_training WHERE user_id = ?",
       (user_id,),
@@ -151,7 +148,7 @@ def handle_message(message):
 
   conn.close()
 
-  # 3. Если ничего из этого — просто просим выбрать глагол
+  # Если не выбрал глагол и не в тренировке — просим нажать кнопку
   bot.send_message(
       message.chat.id,
       "Давай потренируемся! Выбери глагол с помощью кнопок внизу:",
@@ -159,7 +156,7 @@ def handle_message(message):
   )
 
 
-print("Réka запущена в чистом и стабильном режиме...")
+print("Réka запущена в исправленном режиме...")
 
 while True:
   try:
