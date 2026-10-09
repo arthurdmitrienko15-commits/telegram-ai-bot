@@ -1,21 +1,14 @@
 import os
 import random
-import sqlite3
 import time
 import telebot
 from telebot.types import KeyboardButton, ReplyKeyboardMarkup
-from groq import Groq
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-client = Groq(api_key=GROQ_API_KEY)
 
-WELCOME_TEXT = (
-    "Szia! I am Réka, 21 years old, from Budapest. 🇭🇺\n\n"
-    "Давай потренируем венгерские глаголы! Выбери глагол кнопкой внизу:"
-)
+# Простой словарь в памяти для шагов: {user_id: {"verb": "hall", "ru": "слышать", "step": 1}}
+active_trainings = {}
 
 VERBS_DATABASE = [
     ("csinál", "делать"),
@@ -29,24 +22,6 @@ VERBS_DATABASE = [
 ]
 
 
-def init_db():
-  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute("""
-        CREATE TABLE IF NOT EXISTS verb_training (
-            user_id INTEGER PRIMARY KEY,
-            verb_hu TEXT,
-            verb_ru TEXT,
-            step INTEGER
-        )
-    """)
-  conn.commit()
-  conn.close()
-
-
-init_db()
-
-
 def get_verbs_keyboard():
   selected = random.sample(VERBS_DATABASE, 3)
   markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
@@ -58,61 +33,56 @@ def get_verbs_keyboard():
 @bot.message_handler(commands=["start", "reset", "verbs"])
 def cmd_start(message):
   user_id = message.from_user.id
-  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute("DELETE FROM verb_training WHERE user_id = ?", (user_id,))
-  conn.commit()
-  conn.close()
+  # Сбрасываем тренировку
+  if user_id in active_trainings:
+    del active_trainings[user_id]
 
   bot.send_message(
-      message.chat.id, WELCOME_TEXT, reply_markup=get_verbs_keyboard()
+      message.chat.id,
+      "Szia! Выбери глагол для тренировки с помощью кнопок внизу:",
+      reply_markup=get_verbs_keyboard(),
   )
 
 
 @bot.message_handler(func=lambda message: True)
-def handle_message(message):
+def handle_all_messages(message):
   user_id = message.from_user.id
   text = message.text.strip().lower()
-  if not text:
-    return
 
-  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
-  cursor = conn.cursor()
+  print(
+      f"Получено сообщение от {user_id}: '{text}'"
+  )  # Будем видеть в консоли всё, что пишет юзер
 
-  # Ищем, содержит ли сообщение венгерский глагол из нашей базы (по вхождению подстроки)
-  matched_verb = None
+  # 1. Проверяем, не нажал ли пользователь кнопку с глаголом
+  found_verb = None
+  found_ru = None
   for hu, ru in VERBS_DATABASE:
     if hu in text:
-      matched_verb = (hu, ru)
+      found_verb = hu
+      found_ru = ru
       break
 
-  if matched_verb:
-    hu, ru = matched_verb
-    cursor.execute(
-        "INSERT OR REPLACE INTO verb_training (user_id, verb_hu, verb_ru, step)"
-        " VALUES (?, ?, ?, 1)",
-        (user_id, hu, ru, 1),
-    )
-    conn.commit()
-    conn.close()
-
+  if found_verb:
+    # Запускаем тренировку
+    active_trainings[user_id] = {
+        "verb": found_verb,
+        "ru": found_ru,
+        "step": 1,
+    }
     bot.send_message(
         message.chat.id,
-        f"1. lépés: Как будет инфинитив (делать?) для глагола *{ru}*?",
+        f"1. lépés: Как будет инфинитив (делать?) для глагола *{found_ru}*?",
         parse_mode="Markdown",
     )
+    print(f"Старт тренировки для глагола: {found_verb}")
     return
 
-  # Проверяем активный шаг тренировки
-  cursor.execute(
-      "SELECT verb_hu, verb_ru, step FROM verb_training WHERE user_id = ?",
-      (user_id,),
-  )
-  v_row = cursor.fetchone()
-
-  if v_row:
-    hu, ru, step = v_row
-    step += 1
+  # 2. Если пользователь уже в процессе тренировки
+  if user_id in active_trainings:
+    data = active_trainings[user_id]
+    data["step"] += 1
+    step = data["step"]
+    hu = data["verb"]
 
     if step == 2:
       reply_text = f"2. lépés: Напиши форму 3-го лица ед. числа (он/она делает) для глагола *{hu}*."
@@ -127,9 +97,8 @@ def handle_message(message):
           f"5. lépés (последний): Переведи предложение: «Он/она сейчас делает это»."
       )
     else:
-      cursor.execute("DELETE FROM verb_training WHERE user_id = ?", (user_id,))
-      conn.commit()
-      conn.close()
+      # Завершение
+      del active_trainings[user_id]
       bot.send_message(
           message.chat.id,
           "Szép munka! Ты успешно прошел все 5 шагов! 🎉 Выбери новый глагол:",
@@ -137,30 +106,22 @@ def handle_message(message):
       )
       return
 
-    cursor.execute(
-        "UPDATE verb_training SET step = ? WHERE user_id = ?", (step, user_id)
-    )
-    conn.commit()
-    conn.close()
-
     bot.send_message(message.chat.id, reply_text, parse_mode="Markdown")
     return
 
-  conn.close()
-
-  # Если не выбрал глагол и не в тренировке — просим нажать кнопку
+  # 3. Если ничего не подошло
   bot.send_message(
       message.chat.id,
-      "Давай потренируемся! Выбери глагол с помощью кнопок внизу:",
+      "Выбери глагол для тренировки с помощью кнопок внизу:",
       reply_markup=get_verbs_keyboard(),
   )
 
 
-print("Réka запущена в исправленном режиме...")
+print("Бот запущен в максимально простом режиме...")
 
 while True:
   try:
     bot.infinity_polling(timeout=60, long_polling_timeout=60)
   except Exception as e:
-    print(f"Сетевая ошибка: {e}. Переподключение через 5 секунд...")
+    print(f"Ошибка: {e}")
     time.sleep(5)
