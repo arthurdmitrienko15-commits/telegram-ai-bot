@@ -7,7 +7,7 @@ from telebot.types import KeyboardButton, ReplyKeyboardMarkup
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# Храним состояние: {user_id: {"verb_hu": "iszik", "verb_ru": "пить", "step": 1}}
+# Храним состояние: {user_id: {"verb_hu": "lát", "verb_ru": "видеть", "step": 1}}
 active_trainings = {}
 
 VERBS_DATABASE = [
@@ -91,47 +91,14 @@ def handle_all_messages(message):
   text = message.text.strip()
   text_lower = text.lower()
 
-  # 1. Проверяем выбор глагола из кнопок
-  found_hu = None
-  found_ru = None
-  for hu, ru in VERBS_DATABASE:
-    if hu in text_lower:
-      found_hu = hu
-      found_ru = ru
-      break
-
-  if found_hu:
-    active_trainings[user_id] = {
-        "verb_hu": found_hu,
-        "verb_ru": found_ru,
-        "step": 1,
-    }
-
-    # Вычисляем правильный инфинитив для подсказки
-    if found_hu == "eszik":
-      inf_word = "enni"
-    elif found_hu == "iszik":
-      inf_word = "inni"
-    elif found_hu == "vesz":
-      inf_word = "venni"
-    else:
-      inf_word = found_hu + "ni"
-
-    send_reply(
-        message.chat.id,
-        f"Шаг 1: Как будет глагол «{found_ru}» в начальной форме (инфинитив)?",
-        inf_word,
-    )
-    return
-
-  # 2. Если идет тренировка
+  # 1. СНАЧАЛА проверяем, идет ли у пользователя активная тренировка
   if user_id in active_trainings:
     data = active_trainings[user_id]
     step = data["step"]
     hu = data["verb_hu"]
     ru = data["verb_ru"]
 
-    # Переходим к следующему шагу по любому твоему ответу (с похвалой)
+    # Двигаем шаг вперед по любому ответу
     data["step"] += 1
     next_step = data["step"]
 
@@ -150,16 +117,49 @@ def handle_all_messages(message):
           "Mit csinálsz?",
       )
     else:
-      # Конец тренировки
+      # Конец тренировки (после 3 шага)
       del active_trainings[user_id]
       bot.send_message(
           message.chat.id,
-          "🎉 Молодчина! Все 3 шага пройдеы! Выбери новый глагол:",
+          "🎉 Молодчина! Все 3 шага пройдены! Выбери новый глагол:",
           reply_markup=get_verbs_keyboard(),
       )
     return
 
-  # 3. Если вне тренировки
+  # 2. Если тренировки нет — проверяем, выбрал ли пользователь глагол из кнопок
+  found_hu = None
+  found_ru = None
+  for hu, ru in VERBS_DATABASE:
+    if hu in text_lower:
+      found_hu = hu
+      found_ru = ru
+      break
+
+  if found_hu:
+    active_trainings[user_id] = {
+        "verb_hu": found_hu,
+        "verb_ru": found_ru,
+        "step": 1,
+    }
+
+    # Вычисляем правильный инфинитив для подсказки под спойлером
+    if found_hu == "eszik":
+      inf_word = "enni"
+    elif found_hu == "iszik":
+      inf_word = "inni"
+    elif found_hu == "vesz":
+      inf_word = "venni"
+    else:
+      inf_word = found_hu + "ni"
+
+    send_reply(
+        message.chat.id,
+        f"Шаг 1: Как будет глагол «{found_ru}» в начальной форме (инфинитив)?",
+        inf_word,
+    )
+    return
+
+  # 3. Если пользователь пишет левый текст вне тренировки
   bot.send_message(
       message.chat.id,
       "Давай потренируемся! Выбери глагол для тренировки с помощью кнопок внизу:",
@@ -167,7 +167,7 @@ def handle_all_messages(message):
   )
 
 
-print("Река запущена с жесткой логикой без бреда от нейросети...")
+print("Река запущена с исправленной приоритетной очередью шагов...")
 
 while True:
   try:
