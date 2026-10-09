@@ -3,11 +3,15 @@ import random
 import time
 import telebot
 from telebot.types import KeyboardButton, ReplyKeyboardMarkup
+from groq import Groq
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Храним состояние тренировки: {user_id: {"verb": "iszik", "ru": "пить", "step": 1}}
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
+client = Groq(api_key=GROQ_API_KEY)
+
+# Храним состояние: {user_id: {"verb_hu": "ír", "verb_ru": "писать", "step": 1}}
 active_trainings = {}
 
 VERBS_DATABASE = [
@@ -56,17 +60,20 @@ def escape_markdown_v2(text):
   return text
 
 
-def send_reply(chat_id, hu_text, ru_text):
-  """Отправляет сообщение строго со спойлером через |||"""
-  msg = escape_markdown_v2(hu_text)
-  if ru_text:
-    msg += f"\n\n||{escape_markdown_v2(ru_text)}||"
+def send_reply(chat_id, text_main, spoiler_hu=""):
+  """Отправляет ответ с подсказкой/ответом на венгерском под спойлером"""
+  msg = escape_markdown_v2(text_main)
+  if spoiler_hu:
+    msg += f"\n\n||{escape_markdown_v2(spoiler_hu)}||"
 
   try:
     bot.send_message(chat_id=chat_id, text=msg, parse_mode="MarkdownV2")
   except Exception as e:
     print(f"Ошибка MarkdownV2: {e}")
-    bot.send_message(chat_id=chat_id, text=f"{hu_text}\n\n({ru_text})")
+    fallback = text_main
+    if spoiler_hu:
+      fallback += f"\n\n({spoiler_hu})"
+    bot.send_message(chat_id=chat_id, text=fallback)
 
 
 @bot.message_handler(commands=["start", "reset", "verbs"])
@@ -77,7 +84,7 @@ def cmd_start(message):
 
   bot.send_message(
       message.chat.id,
-      "Szia! Válaszd ki a gyakorolni kívánt igét: / Выбери глагол для тренировки:",
+      "Szia! Выбери глагол для тренировки с помощью кнопок внизу:",
       reply_markup=get_verbs_keyboard(),
   )
 
@@ -89,81 +96,101 @@ def handle_all_messages(message):
   text_lower = text.lower()
 
   # 1. Проверяем выбор глагола из кнопок
-  found_verb = None
+  found_hu = None
   found_ru = None
   for hu, ru in VERBS_DATABASE:
     if hu in text_lower:
-      found_verb = hu
+      found_hu = hu
       found_ru = ru
       break
 
-  if found_verb:
+  if found_hu:
     active_trainings[user_id] = {
-        "verb": found_verb,
-        "ru": found_ru,
+        "verb_hu": found_hu,
+        "verb_ru": found_ru,
         "step": 1,
     }
     send_reply(
         message.chat.id,
-        f"1. lépés: Mi az infinitive (csinálni?) a(z) *{found_hu}* ({found_ru}) igénél?",
-        f"Шаг 1: Какая инфинитивная форма (делать?) у глагола «{found_ru}»?",
+        f"Шаг 1: Как будет глагол «{found_ru}» в начальной форме (инфинитив)?",
+        f"Правильно по-венгерски: {found_hu}ni (или смотреть по правилам)",
     )
     return
 
-  # 2. Если в процессе тренировки — двигаем шаги по порядку
+  # 2. Если идет тренировка — через Groq проверяем ответ пользователя и даем следующий шаг
   if user_id in active_trainings:
     data = active_trainings[user_id]
-    data["step"] += 1
     step = data["step"]
-    hu = data["verb"]
-    ru = data["ru"]
+    hu = data["verb_hu"]
+    ru = data["verb_ru"]
 
-    if step == 2:
-      send_reply(
-          message.chat.id,
-          f"2. lépés: Írd le a 3. személy egyes számú (ő) alakot a(z) *{hu}* igéhez.",
-          f"Шаг 2: Напиши форму 3-го лица ед. числа (он/она делает) для глагола «{ru}».",
+    # Формируем промпт для ИИ, чтобы он проверил ответ и выдал следующий вопрос на языке пользователя
+    prompt = (
+        f"Ты — Réka, строгая, но дружелюбная учительница венгерского языка. "
+        f"Глагол тренировки: '{hu}' ({ru}).\n"
+        f"Текущий шаг ученика: {step} из 3.\n"
+        f"- Шаг 1: Инфинитив (делать?)\n"
+        f"- Шаг 2: Форма 3-го лица ед.ч. (он/она делает?)\n"
+        f"- Шаг 3: Вопрос 'Что ты делаешь?' или форма с этим глаголом.\n\n"
+        f"Ученик написал ответ: '{text}'\n\n"
+        f"Твоя задача:\n"
+        f"1. Оцени его ответ на том языке, на котором он пишет (напиши 'Правильно!' либо исправь ошибку).\n"
+        f"2. Задай следующий вопрос по этому же глаголу для следующего шага.\n"
+        f"3. Если это был последний шаг, поздравь ученика и предложи выбрать новый глагол.\n"
+        f"Формат ответа: Сначала текст проверки и новый вопрос, а в самом конце с новой строки напиши маркер перехода: NEXT_STEP (если шаг пройден и надо двигаться дальше) или STAY (если нужно переспросить этот же шаг)."
+    )
+
+    try:
+      completion = client.chat.completions.create(
+          model="openai/gpt-oss-20b",
+          messages=[{"role": "user", "content": prompt}],
+          temperature=0.3,
+          max_tokens=400,
       )
-    elif step == 3:
-      send_reply(
-          message.chat.id,
-          f"3. lépés: Hogyan kérdezed meg: «Mit csinálsz?» ehhez az igéhez?",
-          f"Шаг 3: Как спросить «Что ты делаешь?» с этим глаголом?",
-      )
-    elif step == 4:
-      send_reply(
-          message.chat.id,
-          f"4. lépés: Írd le az 1. személy egyes számú (én) alakot: *{hu}*.",
-          f"Шаг 4: Напиши форму 1-го лица ед. числа (я делаю) с этим глаголом.",
-      )
-    elif step == 5:
-      send_reply(
-          message.chat.id,
-          f"5. lépés (utolsó): Fordítsd le: «Ő most ezt csinálja» a(z) *{hu}* igével.",
-          f"Шаг 5 (последний): Переведи предложение: «Он/она сейчас делает это» (с этим глаголом).",
-      )
+      ai_response = (completion.choices[0].message.content or "").strip()
+    except Exception:
+      ai_response = "Отлично! NEXT_STEP"
+
+    # Обрабатываем решение ИИ
+    if "NEXT_STEP" in ai_response:
+      clean_text = ai_response.replace("NEXT_STEP", "").strip()
+      data["step"] += 1
+      next_step = data["step"]
+
+      if next_step <= 3:
+        # Формируем подсказку на венгерском под спойлер в зависимости от шага
+        if next_step == 2:
+          spoiler = f"Подсказка (он/она): ő {hu}..."
+        else:
+          spoiler = f"Подсказка (ты): Mit csinálsz?"
+
+        send_reply(message.chat.id, clean_text, spoiler)
+      else:
+        del active_trainings[user_id]
+        bot.send_message(
+            message.chat.id,
+            f"{clean_text}\n\n🎉 Отлично! Тренировка завершена. Выбери новый глагол:",
+            reply_markup=get_verbs_keyboard(),
+        )
     else:
-      del active_trainings[user_id]
-      bot.send_message(
+      # Если нужно остаться на шаге (ошибка в ответе)
+      clean_text = ai_response.replace("STAY", "").strip()
+      send_reply(
           message.chat.id,
-          "Szép munka! Sikeresen teljesítetted mind az 5 lépést! 🎉",
-      )
-      bot.send_message(
-          message.chat.id,
-          "Válassz egy új igét / Выбери новый глагол:",
-          reply_markup=get_verbs_keyboard(),
+          clean_text,
+          f"Попробуй еще раз учесть правила для {hu}",
       )
     return
 
   # 3. Если вне тренировки
   bot.send_message(
       message.chat.id,
-      "Válassz egy igét a gyakorláshoz / Выбери глагол для тренировки:",
+      "Давай потренируемся! Выбери глагол для тренировки с помощью кнопок внизу:",
       reply_markup=get_verbs_keyboard(),
   )
 
 
-print("Réka запущена со стабильными спойлерами...")
+print("Река запущена с проверкой ответов и подсказками под спойлером...")
 
 while True:
   try:
