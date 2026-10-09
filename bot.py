@@ -12,7 +12,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 client = Groq(api_key=GROQ_API_KEY)
 
-HISTORY_LIMIT = 30
+HISTORY_LIMIT = 20
 
 WELCOME_TEXT = (
     "Szia! I am Réka, 21 years old, from Budapest. 🇭🇺\n\n"
@@ -21,36 +21,28 @@ WELCOME_TEXT = (
 )
 
 SYSTEM_PROMPT = (
-    "Ты — Réka (Рéка), виртуальная учительница венгерского языка, ИИ-персонаж. "
-    "Тебе 21 год, ты живёшь в Будапеште. Характер: строгая, но живая, с юмором. "
-    "Ты не бездушный бот-допросчик, а настоящий преподаватель: если ученик чего-то не понимает, "
-    "задает вопрос по-русски, пишет 'не понял' или тупит, ты ОБЯЗАНА остановиться, "
-    "по-человечески объяснить грамматику, разобрать конструкцию или слово, а не спамить новыми вопросами!\n\n"
-    "ПРАВИЛА И ПРИОРИТЕТЫ:\n"
-    "1. ЖИВОЙ ДИАЛОГ ВМЕСТО ДОПРОСА: Никогда не заваливай ученика вопросами подряд. Если ученик не понял прошлый вопрос, "
-    "сначала разбери его, объясни значение и помоги составить фразу. Только после этого можно двигаться дальше.\n"
-    "2. УРОВЕНЬ: Новичок (A1–A2) — короткие фразы, простая лексика, подробный перевод и объяснения логики. "
-    "Средний (B1+) — больше венгерского, идиомы, живая речь.\n"
-    "3. ИСПРАВЛЕНИЯ И ЕДА: Если есть реальные ошибки в грамматике — исправляй. НО если ученик называет блюдо "
-    "(Gyros, Pizza, Sushi, Kebab и т.д.) в ответ на вопрос о еде, **никогда** не придирайся к тому, "
-    "что это не чисто венгерское слово! Это нормальная еда в Будапеште, принимай это с юмором.\n"
-    "4. РЕАКЦИЯ НА «НЕ ПОНЯЛ» / «NEM ÉRTEM»: Если ученик пишет по-русски, что не понял, запутался или просит помощи: "
-    "сбрось темп, объясни простыми словами, дай разбор конструкции и предложи 1-2 понятных примера.\n"
-    "5. МИКРО-ГРАММАТИКА: Раз в несколько реплик объясняй правило коротко и по делу (только по делу, не душно).\n"
-    "6. ВЕНГЕРСКИЙ ЯЗЫК: Пиши только то, в чем уверена на 100% (падежи -t, -ban/-ben, гармония гласных).\n"
-    "7. ФОРМАТ: Каждая реплика строго вида [венгерский] ||| [русский перевод/объяснение]. "
-    "Если реплик несколько, разделяй их '###'. Не больше 3 реплик за раз."
+    "Ты — Réka, виртуальная учительница венгерского языка из Будапешта. 21 год. "
+    "Строгая, но дружелюбная, с юмором. Ты помогаешь ученику учить венгерский.\n\n"
+    "ЖЕСТКИЕ ПРАВИЛА:\n"
+    "1. ФОРМАТ: Каждая реплика строго вида: [Венгерский текст] ||| [Русский перевод или объяснение]. "
+    "Если реплик несколько, разделяй их через '###'. Никогда не оставляй предложения оборванными!\n"
+    "2. РЕАКЦИЯ НА НЕПОНИМАНИЕ: Если ученик пишет 'не понял', 'что отвечать' или задает вопрос по-русски — "
+    "ЗАПРЕЩЕНО задавать новые вопросы! Объясни грамматику простыми словами, разбери конструкцию "
+    "и дай готовый пример, который можно использовать.\n"
+    "3. ЕДА: Если ученик в ответ на вопрос о еде пишет 'Pizza', 'Sushi', 'Gyros' — не придирайся, "
+    "это нормальная еда в Будапеште, принимай с юмором.\n"
+    "4. Не пиши слишком длинно (максимум 2 коротких абзаца/реплики)."
 )
 
 DAILY_WORDS = [
-    ("egészségére", "to health / bless you"),
-    ("szépen", "beautifully / nicely"),
-    ("biztosan", "surely / certainly"),
-    ("pillanat", "moment / minute"),
-    ("lépés", "step"),
-    ("kávézó", "cafe"),
-    ("ugyanis", "namely / the fact is"),
-    ("szükség", "necessity / need"),
+    ("beszél", "говорит"),
+    ("egészségére", "на здоровье / будь здоров"),
+    ("szépen", "красиво / мило"),
+    ("biztosan", "точно / наверняка"),
+    ("pillanat", "момент / минутка"),
+    ("lépés", "шаг"),
+    ("kávézó", "кафе"),
+    ("szükség", "нужда / необходимость"),
 ]
 
 
@@ -174,21 +166,29 @@ def escape_markdown_v2(text):
 
 
 def send_reply(chat_id, reply_text):
-  for part in reply_text.split("###"):
-    part = part.strip()
-    if not part:
+  blocks = reply_text.split("###")
+  for block in blocks:
+    block = block.strip()
+    if not block:
       continue
 
-    if "|||" in part:
-      hu, ru = [s.strip() for s in part.split("|||", 1)]
+    if "|||" in block:
+      parts = block.split("|||")
+      hu = parts[0].strip()
+      ru = parts[1].strip() if len(parts) > 1 else ""
     else:
-      hu, ru = part, ""
+      hu = block
+      ru = ""
 
     msg = escape_markdown_v2(hu)
     if ru:
       msg += f"\n\n||{escape_markdown_v2(ru)}||"
 
-    bot.send_message(chat_id=chat_id, text=msg, parse_mode="MarkdownV2")
+    try:
+      bot.send_message(chat_id=chat_id, text=msg, parse_mode="MarkdownV2")
+    except Exception as e:
+      print(f"Ошибка отправки сообщения: {e}")
+      bot.send_message(chat_id=chat_id, text=f"{hu}\n\n({ru})")
 
 
 def send_proactive_message(slot_name):
@@ -205,22 +205,12 @@ def send_proactive_message(slot_name):
     try:
       hu, ru, count = get_or_set_user_word(user_id)
 
-      # 4 раза присылаем слово с переводом
       if count <= 4:
-        text_to_send = (
-            f"Szia! Napi szó (#{count}/4): *{hu}* — {ru}. "
-            f"Hogy telik a napod? Írj egy mondatot vele! ||| "
-            f"Привет! Слово дня (#{count}/4): {hu} — {ru}. "
-            f"Как проходит твой день? Напиши с ним предложение!"
-        )
+        # Первые 4 раза: формат как ты просил (слово — перевод)
+        text_to_send = f"{hu} — {ru} ||| {hu} — {ru}"
       else:
-        # На 5-й раз — проверка без перевода слова
-        text_to_send = (
-            f"Ismétlés a tudás atyja! 🧠 Emlékszel a szóra? "
-            f"Mit jelent a *{hu}*? Írj egy mondatot magyarul! ||| "
-            f"Повторение — мать учения! 🧠 Помнишь слово? "
-            f"Какой перевод у слова {hu}? Напиши предложение на венгерском! (Подсказка: {ru})"
-        )
+        # На 5-й раз: только венгерское слово, перевод пустой (пиши сам)
+        text_to_send = f"{hu} —  ||| Напиши перевод для слова {hu} (Правильный ответ: {ru})"
 
       save_message(user_id, "assistant", text_to_send)
       send_reply(user_id, text_to_send)
@@ -254,8 +244,8 @@ def handle_message(message):
     completion = client.chat.completions.create(
         model="openai/gpt-oss-20b",
         messages=history,
-        temperature=0.7,
-        max_tokens=800,
+        temperature=0.3,
+        max_tokens=600,
     )
 
     reply_text = (completion.choices[0].message.content or "").strip()
@@ -269,7 +259,6 @@ def handle_message(message):
     print(f"Ошибка при обращении к AI: {e}")
 
 
-# Настройка расписания рассылок (4 раза в день)
 scheduler = BackgroundScheduler()
 scheduler.add_job(
     send_proactive_message, "cron", hour=9, minute=0, args=["morning"]
@@ -285,7 +274,7 @@ scheduler.add_job(
 )
 scheduler.start()
 
-print("Réka запущена, расписание рассылок активировано...")
+print("Réka запущена в чистом формате словаря...")
 
 while True:
   try:
