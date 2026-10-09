@@ -3,15 +3,11 @@ import random
 import time
 import telebot
 from telebot.types import KeyboardButton, ReplyKeyboardMarkup
-from groq import Groq
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-client = Groq(api_key=GROQ_API_KEY)
 
-# Храним состояние: {user_id: {"verb_hu": "lát", "verb_ru": "видеть", "step": 1}}
+# Храним состояние: {user_id: {"verb_hu": "csinál", "verb_ru": "делать", "step": 1}}
 active_trainings = {}
 
 VERBS_DATABASE = [
@@ -91,14 +87,70 @@ def cmd_start(message):
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
   user_id = message.from_user.id
-  text = message.text.strip()
-  text_lower = text.lower()
+  text = message.text.strip().lower()
 
-  # 1. Проверяем выбор глагола из кнопок (старт тренировки)
+  # 1. СНАЧАЛА проверяем, идет ли активная тренировка
+  if user_id in active_trainings:
+    data = active_trainings[user_id]
+    step = data["step"]
+    hu = data["verb_hu"]
+    ru = data["verb_ru"]
+
+    # Определяем правильный ответ для текущего шага
+    if step == 1:
+      if hu == "eszik":
+        correct = "enni"
+      elif hu == "iszik":
+        correct = "inni"
+      elif hu == "vesz":
+        correct = "venni"
+      else:
+        correct = hu + "ni"
+    elif step == 2:
+      correct = hu
+    elif step == 3:
+      correct = "mit csinálsz?"
+    else:
+      correct = ""
+
+    # Проверяем ответ (смягченно: если введенный текст совпадает или содержит правильный ответ)
+    if correct in text or text in correct:
+      data["step"] += 1
+      next_step = data["step"]
+
+      if next_step == 2:
+        send_reply(
+            message.chat.id,
+            f"Правильно! 🎉\n\nШаг 2: Как будет «он / она делает» для глагола «{ru}»?",
+            hu,
+        )
+      elif next_step == 3:
+        send_reply(
+            message.chat.id,
+            f"Отлично! 🔥\n\nШаг 3: Как спросить «Что ты делаешь?» с этим глаголом?",
+            "Mit csinálsz?",
+        )
+      else:
+        del active_trainings[user_id]
+        bot.send_message(
+            message.chat.id,
+            "🎉 Молодчина! Все 3 шага пройдены! Выбери новый глагол:",
+            reply_markup=get_verbs_keyboard(),
+        )
+    else:
+      # Если ошиблись — мягко просим попробовать еще раз, не сдвигая шаг
+      send_reply(
+          message.chat.id,
+          f"Не совсем так. Попробуй еще раз для глагола «{ru}»:",
+          correct,
+      )
+    return
+
+  # 2. Если тренировки нет — проверяем выбор глагола из кнопок
   found_hu = None
   found_ru = None
   for hu, ru in VERBS_DATABASE:
-    if hu in text_lower:
+    if hu in text:
       found_hu = hu
       found_ru = ru
       break
@@ -110,7 +162,6 @@ def handle_all_messages(message):
         "step": 1,
     }
 
-    # Инфинитив для подсказки
     if found_hu == "eszik":
       inf_word = "enni"
     elif found_hu == "iszik":
@@ -127,85 +178,7 @@ def handle_all_messages(message):
     )
     return
 
-  # 2. Если идет тренировка — проверяем ответ через Groq
-  if user_id in active_trainings:
-    data = active_trainings[user_id]
-    step = data["step"]
-    hu = data["verb_hu"]
-    ru = data["verb_ru"]
-
-    # Промпт для строгой проверки ответа ИИ
-    prompt = (
-        f"Ты — Réka, учительница венгерского языка. Ученик тренирует глагол '{hu}' ({ru}).\n"
-        f"Текущий шаг: {step} из 3.\n"
-        f"- Шаг 1: Инфинитив (например, látni для lát)\n"
-        f"- Шаг 2: Форма 3-го лица ед.ч. (он/она, например lát)\n"
-        f"- Шаг 3: Вопрос 'Что ты делаешь?' с этим глаголом (или форма 1-го лица/вопрос)\n\n"
-        f"Ученик написал ответ: '{text}'\n\n"
-        f"Инструкция:\n"
-        f"1. Проверь, правильный ли это ответ для текущего шага. Если ученик написал бред, 'ок' или ошибся — напиши короткое исправление или попроси ответить нормально, и в конце напиши маркер: STAY\n"
-        f"2. Если ответ правильный (или близкий к нему) — похвали ученика и в конце напиши маркер: NEXT_STEP"
-    )
-
-    try:
-      completion = client.chat.completions.create(
-          model="openai/gpt-oss-20b",
-          messages=[{"role": "user", "content": prompt}],
-          temperature=0.2,
-          max_tokens=200,
-      )
-      ai_response = (completion.choices[0].message.content or "").strip()
-    except Exception:
-      ai_response = "Правильно! NEXT_STEP"
-
-    if "NEXT_STEP" in ai_response:
-      clean_text = ai_response.replace("NEXT_STEP", "").strip()
-      data["step"] += 1
-      next_step = data["step"]
-
-      if next_step == 2:
-        send_reply(
-            message.chat.id,
-            f"{clean_text}\n\nШаг 2: Как будет «он / она делает» для глагола «{ru}»?",
-            hu,
-        )
-      elif next_step == 3:
-        # Для третьего шага формируем правильный вопрос/ответ под этот глагол
-        spoiler_ans = f"Mit csinálsz?"
-        send_reply(
-            message.chat.id,
-            f"{clean_text}\n\nШаг 3: Как спросить «Что ты делаешь?» используя глагол «{ru}»?",
-            spoiler_ans,
-        )
-      else:
-        del active_trainings[user_id]
-        bot.send_message(
-            message.chat.id,
-            f"{clean_text}\n\n🎉 Отлично! Все 3 шага пройдены! Выбери новый глагол:",
-            reply_markup=get_verbs_keyboard(),
-        )
-    else:
-      # Если ответ неправильный — оставляем на том же шаге
-      clean_text = ai_response.replace("STAY", "").strip()
-      if not clean_text:
-        clean_text = "Не совсем так. Попробуй еще раз!"
-      
-      # Возвращаем подсказку в зависимости от шага
-      if step == 1:
-        spoiler = (
-            "enni"
-            if hu == "eszik"
-            else ("inni" if hu == "iszik" else ("venni" if hu == "vesz" else hu + "ni"))
-        )
-      elif step == 2:
-        spoiler = hu
-      else:
-        spoiler = "Mit csinálsz?"
-
-      send_reply(message.chat.id, clean_text, spoiler)
-    return
-
-  # 3. Если вне тренировки
+  # 3. Если пишет левый текст вне тренировки
   bot.send_message(
       message.chat.id,
       "Давай потренируемся! Выбери глагол для тренировки с помощью кнопок внизу:",
@@ -213,7 +186,7 @@ def handle_all_messages(message):
   )
 
 
-print("Река запущена с умной проверкой ответов...")
+print("Река запущена с жесткой и честной логикой проверки...")
 
 while True:
   try:
