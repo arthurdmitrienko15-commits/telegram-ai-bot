@@ -4,7 +4,7 @@ import sqlite3
 import time
 from apscheduler.schedulers.background import BackgroundScheduler
 import telebot
-from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
+from telebot.types import KeyboardButton, ReplyKeyboardMarkup
 from groq import Groq
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -17,7 +17,8 @@ HISTORY_LIMIT = 20
 
 WELCOME_TEXT = (
     "Szia! I am Réka, 21 years old, from Budapest. 🇭🇺\n\n"
-    "Я твоя виртуальная учительница венгерского. Выбери глагол для тренировки:"
+    "Я твоя виртуальная учительница венгерского. Давай потренируем глаголы! "
+    "Выбери глагол с помощью кнопок внизу экрана:"
 )
 
 VERBS_DATABASE = [
@@ -202,65 +203,28 @@ def send_proactive_message(slot_name):
       print(f"Ошибка проактивной рассылки для {user_id}: {e}")
 
 
-def show_verbs_menu(chat_id):
+def get_verbs_keyboard():
+  # Берем 3 случайных глагола для клавиатуры
   selected = random.sample(VERBS_DATABASE, 3)
-  markup = InlineKeyboardMarkup()
+  markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
   for hu, ru in selected:
-    # Делаем callback_data коротким и надежным
-    markup.add(
-        InlineKeyboardButton(
-            text=f"{hu} ({ru})", callback_data=f"v_{hu}__{ru}"
-        )
-    )
-  bot.send_message(
-      chat_id, "Válassz egy igét / Выбери глагол:", reply_markup=markup
-  )
+    markup.add(KeyboardButton(text=f"{hu} ({ru})"))
+  return markup
 
 
 @bot.message_handler(commands=["start", "reset", "verbs"])
 def cmd_start(message):
   user_id = message.from_user.id
   clear_history(user_id)
-  bot.send_message(message.chat.id, WELCOME_TEXT)
-  show_verbs_menu(message.chat.id)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("v_"))
-def handle_verb_choice(call):
-  # Гасим часики загрузки на кнопке в самом начале
-  bot.answer_callback_query(call.id)
-
-  user_id = call.from_user.id
-  try:
-    _, hu, ru = call.data.split("__", 2)
-  except Exception:
-    # Запасной вариант парсинга на случай сбоя
-    parts = call.data.split("_")
-    hu = parts[1]
-    ru = "глагол"
-
-  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute(
-      "INSERT OR REPLACE INTO verb_training (user_id, verb_hu, verb_ru, step)"
-      " VALUES (?, ?, ?, 1)",
-      (user_id, hu, ru, 1),
+  bot.send_message(
+      message.chat.id, WELCOME_TEXT, reply_markup=get_verbs_keyboard()
   )
-  conn.commit()
-  conn.close()
-
-  text = (
-      f"1. lépés: Как будет инфинитив (делать?) для глагола *{ru}*? ||| "
-      f"Шаг 1: Как будет инфинитив (делать?) для глагола «{ru}»?"
-  )
-  save_message(user_id, "assistant", text)
-  send_reply(call.message.chat.id, text)
 
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
   user_id = message.from_user.id
-  text = message.text
+  text = message.text.strip()
   if not text:
     return
 
@@ -271,6 +235,33 @@ def handle_message(message):
 
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
+
+  # Проверяем, нажал ли пользователь глагол из клавиатуры (формат "hu (ru)")
+  selected_verb_data = None
+  for hu, ru in VERBS_DATABASE:
+    if text.lower() == f"{hu} ({ru})".lower():
+      selected_verb_data = (hu, ru)
+      break
+
+  if selected_verb_data:
+    hu, ru = selected_verb_data
+    cursor.execute(
+        "INSERT OR REPLACE INTO verb_training (user_id, verb_hu, verb_ru, step)"
+        " VALUES (?, ?, ?, 1)",
+        (user_id, hu, ru, 1),
+    )
+    conn.commit()
+    conn.close()
+
+    reply_text = (
+        f"1. lépés: Как будет инфинитив (делать?) для глагола *{ru}*? ||| "
+        f"Шаг 1: Как будет инфинитив (делать?) для глагола «{ru}»?"
+    )
+    save_message(user_id, "assistant", reply_text)
+    send_reply(message.chat.id, reply_text)
+    return
+
+  # Проверяем, идет ли активная тренировка шагов
   cursor.execute(
       "SELECT verb_hu, verb_ru, step FROM verb_training WHERE user_id = ?",
       (user_id,),
@@ -304,7 +295,7 @@ def handle_message(message):
     else:
       reply_text = (
           f"Szép munka! Ты прошел все 5 шагов для глагола *{hu}*! 🎉 "
-          f"Выбери новый глагол ниже: ||| Отличная работа! Ты прошел все 5 шагов!"
+          f"Выбери новый глагол на клавиатуре ниже: ||| Отличная работа! Ты прошел все 5 шагов!"
       )
       cursor.execute("DELETE FROM verb_training WHERE user_id = ?", (user_id,))
       save_message(user_id, "user", text)
@@ -312,7 +303,11 @@ def handle_message(message):
       send_reply(message.chat.id, reply_text)
       conn.commit()
       conn.close()
-      show_verbs_menu(message.chat.id)
+      bot.send_message(
+          message.chat.id,
+          "Выбери следующий глагол для тренировки:",
+          reply_markup=get_verbs_keyboard(),
+      )
       return
 
     cursor.execute(
@@ -328,11 +323,12 @@ def handle_message(message):
 
   conn.close()
 
-  # Если тренировка не активна, принудительно предлагаем выбрать глагол кнопками
+  # Если тренировка не запущена и пользователь пишет произвольный текст — предлагаем выбрать глагол кнопками
   bot.send_message(
-      message.chat.id, "Давай потренируемся! Выбери глагол для тренировки:"
+      message.chat.id,
+      "Давай потренируемся! Выбери глагол для тренировки с помощью кнопок внизу:",
+      reply_markup=get_verbs_keyboard(),
   )
-  show_verbs_menu(message.chat.id)
 
 
 scheduler = BackgroundScheduler()
@@ -350,7 +346,7 @@ scheduler.add_job(
 )
 scheduler.start()
 
-print("Réka запущена, кнопки пересозданы с надежным callback_data...")
+print("Réka запущена с надежными обычными кнопками...")
 
 while True:
   try:
