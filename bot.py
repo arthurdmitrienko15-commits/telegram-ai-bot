@@ -17,18 +17,8 @@ HISTORY_LIMIT = 20
 
 WELCOME_TEXT = (
     "Szia! I am Réka, 21 years old, from Budapest. 🇭🇺\n\n"
-    "I am your virtual Hungarian teacher. Выбери команду /verbs, чтобы выбрать глагол для тренировки, "
-    "или просто пиши мне в чат!"
-)
-
-SYSTEM_PROMPT = (
-    "Ты — Réka, виртуальная учительница венгерского языка из Будапешта. 21 год. "
-    "Строгая, но дружелюбная, с юмором. Ты ведешь пошаговую тренировку глаголов с учеником.\n\n"
-    "ЖЕСТКИЕ ПРАВИЛА:\n"
-    "1. ФОРМАТ (СТРОГО): Каждая реплика должна быть разделена на венгерскую часть и перевод через разделитель `|||`. "
-    "Пример: Nagyon jó! ||| Очень хорошо!\n"
-    "2. Если реплик несколько, разделяй их через `###`.\n"
-    "3. Никогда не повторяй слова ученика слепо, веди диалог и проверяй формы глаголов."
+    "Я твоя виртуальная учительница венгерского. Давай потренируем глаголы! "
+    "Выбери глагол с помощью кнопок ниже:"
 )
 
 VERBS_DATABASE = [
@@ -125,23 +115,6 @@ def clear_history(user_id):
   conn.close()
 
 
-def get_history(user_id):
-  conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute(
-      "SELECT role, content FROM messages WHERE user_id = ? "
-      "ORDER BY rowid DESC LIMIT ?",
-      (user_id, HISTORY_LIMIT),
-  )
-  rows = cursor.fetchall()[::-1]
-  conn.close()
-
-  history = [{"role": "system", "content": SYSTEM_PROMPT}]
-  for role, content in rows:
-    history.append({"role": role, "content": content})
-  return history
-
-
 def save_message(user_id, role, content):
   conn = sqlite3.connect("bot_memory.db", check_same_thread=False)
   cursor = conn.cursor()
@@ -218,23 +191,19 @@ def send_proactive_message(slot_name):
   for user_id in users:
     try:
       hu, ru, count = get_or_set_user_word(user_id)
-
       if count <= 4:
         text_to_send = f"{hu} — {ru} ||| {hu} — {ru}"
       else:
         text_to_send = (
             f"{hu} —  ||| Напиши перевод для слова {hu} (Правильный ответ: {ru})"
         )
-
       save_message(user_id, "assistant", text_to_send)
       send_reply(user_id, text_to_send)
     except Exception as e:
       print(f"Ошибка проактивной рассылки для {user_id}: {e}")
 
 
-@bot.message_handler(commands=["verbs"])
-def choose_verbs(message):
-  user_id = message.from_user.id
+def show_verbs_menu(chat_id):
   selected = random.sample(VERBS_DATABASE, 3)
   markup = InlineKeyboardMarkup()
   for hu, ru in selected:
@@ -243,16 +212,29 @@ def choose_verbs(message):
             text=f"{hu} ({ru})", callback_data=f"verb_{hu}_{ru}"
         )
     )
-
   bot.send_message(
-      message.chat.id,
+      chat_id,
       "Válassz egy igét a gyakorláshoz! / Выбери глагол для тренировки:",
       reply_markup=markup,
   )
 
 
+@bot.message_handler(commands=["verbs", "start", "reset"])
+def cmd_start(message):
+  user_id = message.from_user.id
+  clear_history(user_id)
+  bot.send_message(message.chat.id, WELCOME_TEXT)
+  show_verbs_menu(message.chat.id)
+
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("verb_"))
 def handle_verb_choice(call):
+  # ЖЕСТКО гасим анимацию загрузки на кнопке, чтобы она не мигала
+  try:
+    bot.answer_callback_query(call.id)
+  except Exception:
+    pass
+
   user_id = call.from_user.id
   _, hu, ru = call.data.split("_", 2)
 
@@ -266,20 +248,13 @@ def handle_verb_choice(call):
   conn.commit()
   conn.close()
 
-  bot.answer_callback_query(call.id, text=f"Выбран глагол: {hu} ({ru})")
+  # Шаг 1
   text = (
-      f"Kezdjük! 1. lépés: Как будет инфинитив (делать?) для глагола *{ru}*? ||| "
-      f"Начнем! Шаг 1: Как будет инфинитив (делать?) для глагола «{ru}»?"
+      f"1. lépés: Как будет инфинитив (делать?) для глагола *{ru}*? ||| "
+      f"Шаг 1: Как будет инфинитив (делать?) для глагола «{ru}»?"
   )
   save_message(user_id, "assistant", text)
   send_reply(call.message.chat.id, text)
-
-
-@bot.message_handler(commands=["reset", "start"])
-def send_welcome(message):
-  user_id = message.from_user.id
-  clear_history(user_id)
-  bot.send_message(message.chat.id, WELCOME_TEXT)
 
 
 @bot.message_handler(func=lambda message: True)
@@ -308,31 +283,38 @@ def handle_message(message):
 
     if step == 2:
       reply_text = (
-          f"Helyes! 2. lépés: Напиши форму для 3-го лица ед. числа (он/она делает) "
-          f"для глагола *{hu}*. ||| Правильно! Шаг 2: Напиши форму "
-          f"для 3-го лица ед. числа (он/она делает)."
+          f"2. lépés: Напиши форму 3-го лица ед. числа (он/она делает) "
+          f"для глагола *{hu}*. ||| Шаг 2: Напиши форму 3-го лица ед. числа (он/она делает)."
       )
     elif step == 3:
       reply_text = (
-          f"Ügyes vagy! 3. lépés: Как спросить «Что ты делаешь?» используя этот глагол? ||| "
-          f"Молодец! Шаг 3: Как спросить «Что ты делаешь?» используя этот глагол?"
+          f"3. lépés: Как спросить «Что ты делаешь?» используя этот глагол? ||| "
+          f"Шаг 3: Как спросить «Что ты делаешь?» используя этот глагол?"
       )
     elif step == 4:
       reply_text = (
-          f"Jó! 4. lépés: Составь короткое предложение с этим глаголом в 1-м лице (я...). ||| "
-          f"Хорошо! Шаг 4: Составь короткое предложение с этим глаголом для «я»."
+          f"4. lépés: Напиши форму для «я делаю» с этим глаголом. ||| "
+          f"Шаг 4: Напиши форму для «я делаю» с этим глаголом."
       )
     elif step == 5:
       reply_text = (
-          f"Utolsó, 5. lépés: Переведи на венгерский: «Он/она сейчас делает это». ||| "
-          f"Последний, 5-й шаг: Переведи на венгерский: «Он/она сейчас делает это»."
+          f"5. lépés (последний): Переведи предложение: «Он/она сейчас делает это». ||| "
+          f"Шаг 5 (последний): Переведи предложение: «Он/она сейчас делает это»."
       )
     else:
       reply_text = (
-          f"Gratulálok! Ты успешно прошел все 5 шагов для глагола *{hu}*! "
-          f"Выбери новый глагол через /verbs. ||| Поздравляю! Ты прошел все 5 шагов! Выбери новый глагол через /verbs."
+          f"Szép munka! Ты прошел все 5 шагов для глагола *{hu}*! 🎉 "
+          f"Выбери новый глагол ниже: ||| Отличная работа! Ты прошел все 5 шагов!"
       )
       cursor.execute("DELETE FROM verb_training WHERE user_id = ?", (user_id,))
+      save_message(user_id, "user", text)
+      save_message(user_id, "assistant", reply_text)
+      send_reply(message.chat.id, reply_text)
+      conn.commit()
+      conn.close()
+      # Сразу автоматически предлагаем новые слова кнопками
+      show_verbs_menu(message.chat.id)
+      return
 
     cursor.execute(
         "UPDATE verb_training SET step = ? WHERE user_id = ?", (step, user_id)
@@ -347,26 +329,12 @@ def handle_message(message):
 
   conn.close()
 
-  save_message(user_id, "user", text)
-  history = get_history(user_id)
-
-  try:
-    completion = client.chat.completions.create(
-        model="openai/gpt-oss-20b",
-        messages=history,
-        temperature=0.3,
-        max_tokens=600,
-    )
-
-    reply_text = (completion.choices[0].message.content or "").strip()
-    if not reply_text:
-      reply_text = "Magyarul, kérlek! ||| In Hungarian, please!"
-
-    save_message(user_id, "assistant", reply_text)
-    send_reply(message.chat.id, reply_text)
-
-  except Exception as e:
-    print(f"Ошибка при обращении к AI: {e}")
+  # Если тренировка не запущена, бот сам предлагает выбрать глагол через кнопки вместо лишних текстов
+  bot.send_message(
+      message.chat.id,
+      "Давай потренируемся! Выбери глагол для тренировки:",
+  )
+  show_verbs_menu(message.chat.id)
 
 
 scheduler = BackgroundScheduler()
@@ -384,7 +352,7 @@ scheduler.add_job(
 )
 scheduler.start()
 
-print("Réka запущена и работает стабильно...")
+print("Réka запущена, инлайн-кнопки починены...")
 
 while True:
   try:
