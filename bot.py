@@ -1,5 +1,6 @@
 import os
 import random
+import threading
 import time
 import telebot
 from telebot.types import KeyboardButton, ReplyKeyboardMarkup
@@ -9,6 +10,8 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 # Храним состояние: {user_id: {"lang": "ru/en/...", "step": 0}}
 active_trainings = {}
+# Список активных пользователей для рассылки
+all_users = set()
 
 VERBS_DATABASE = [
     ("csinál", "делать", "to do", "csinálni"),
@@ -21,7 +24,6 @@ VERBS_DATABASE = [
     ("vesz", "брать / покупать", "to buy", "venni"),
 ]
 
-# Поддерживаемые языки и их переводы интерфейса
 LANGUAGES = {
     "ru": {
         "name": "🇷🇺 Русский",
@@ -42,6 +44,9 @@ LANGUAGES = {
         "q3_olvas": "Как спросить «Что ты читаешь?» с этим глаголом?",
         "q3_lát": "Как спросить «Что ты видишь?» с этим глаголом?",
         "q3_def": "Как спросить «Что ты делаешь?» с этим глаголом?",
+        "morning": "☀️ Доброе утро! Время повторить венгерские глаголы?",
+        "day": "☕️ Как проходит день? Давай разомнемся и повторим пару глаголов!",
+        "evening": "🌙 Вечернее повторение! Не забудь закрепить глаголы перед сном.",
     },
     "en": {
         "name": "🇬🇧 English",
@@ -62,113 +67,11 @@ LANGUAGES = {
         "q3_olvas": "How to ask «What are you reading?» with this verb?",
         "q3_lát": "How to ask «What do you see?» with this verb?",
         "q3_def": "How to ask «What are you doing?» with this verb?",
-    },
-    "es": {
-        "name": "🇪🇸 Español",
-        "choose": "Elige tu idioma:",
-        "welcome": (
-            "¡Genial! Elige un verbo para practicar usando los botones de"
-            " abajo:"
+        "morning": "☀️ Good morning! Time to practice Hungarian verbs?",
+        "day": "☕️ How is your day going? Let's practice a few verbs!",
+        "evening": (
+            "🌙 Evening review! Don't forget to practice before sleep."
         ),
-        "choose_btn": "Por favor, elige un verbo usando los botones:",
-        "correct": "¡Correcto! 🎉",
-        "fire": "¡Excelente! 🔥",
-        "finish": (
-            "🎉 ¡Increíble! ¡Los 3 pasos completados! Elige un nuevo verbo:"
-        ),
-        "retry": "No exactamente. Inténtalo de nuevo para «{v}»:",
-        "q1": "Paso 1: ¿Cuál es el infinitivo para «{v}»?",
-        "q2": "Paso 2: ¿Cuál es la forma de él/ella para «{v}»?",
-        "q3_eszik": "¿Cómo preguntar «¿Qué comes?» con este verbo?",
-        "q3_iszik": "¿Cómo preguntar «¿Qué bebes?» con este verbo?",
-        "q3_ír": "¿Cómo preguntar «¿Qué escribes?» con este verbo?",
-        "q3_olvas": "¿Cómo preguntar «¿Qué lees?» con este verbo?",
-        "q3_lát": "¿Cómo preguntar «¿Qué ves?» con este verbo?",
-        "q3_def": "¿Cómo preguntar «¿Qué haces?» con este verbo?",
-    },
-    "fr": {
-        "name": "🇫🇷 Français",
-        "choose": "Choisissez votre langue :",
-        "welcome": (
-            "Super ! Choisissez un verbe à pratiquer en utilisant les boutons"
-            " ci-dessous :"
-        ),
-        "choose_btn": "Veuillez choisir un verbe en utilisant les boutons :",
-        "correct": "Correct ! 🎉",
-        "fire": "Excellent ! 🔥",
-        "finish": (
-            "🎉 Bravo ! Les 3 étapes sont terminées ! Choisissez un nouveau"
-            " verbe :"
-        ),
-        "retry": "Pas tout à fait. Réessayez pour «{v}» :",
-        "q1": "Étape 1 : Quel est l'infinitif pour «{v}» ?",
-        "q2": "Étape 2 : Quelle est la forme 'il/elle' pour «{v}» ?",
-        "q3_eszik": "Comment demander « Qu'est-ce que tu manges ? » ?",
-        "q3_iszik": "Comment demander « Qu'est-ce que tu bois ? » ?",
-        "q3_ír": "Comment demander « Qu'est-ce que tu écris ? » ?",
-        "q3_olvas": "Comment demander « Qu'est-ce que tu lis ? » ?",
-        "q3_lát": "Comment demander « Qu'est-ce que tu vois ? » ?",
-        "q3_def": "Comment demander « Qu'est-ce que tu fais ? » ?",
-    },
-    "de": {
-        "name": "🇩🇪 Deutsch",
-        "choose": "Wähle deine Sprache:",
-        "welcome": (
-            "Super! Wähle ein Verb zum Üben mit den Buttons unten:"
-        ),
-        "choose_btn": "Bitte wähle ein Verb über die Buttons:",
-        "correct": "Richtig! 🎉",
-        "fire": "Super! 🔥",
-        "finish": (
-            "🎉 Geschafft! Alle 3 Schritte abgeschlossen! Wähle ein neues Verb:"
-        ),
-        "retry": "Nicht ganz. Versuche es noch einmal für «{v}»:",
-        "q1": "Schritt 1: Wie lautet der Infinitiv für «{v}»?",
-        "q2": "Schritt 2: Wie lautet die 'er/sie'-Form für «{v}»?",
-        "q3_eszik": "Wie fragt man „Was isst du?“ mit diesem Verb?",
-        "q3_iszik": "Wie fragt man „Was trinkst du?“ mit diesem Verb?",
-        "q3_ír": "Wie fragt man „Was schreibst du?“ mit diesem Verb?",
-        "q3_olvas": "Wie fragt man „Was liest du?“ mit diesem Verb?",
-        "q3_lát": "Wie fragt man „Was siehst du?“ mit diesem Verb?",
-        "q3_def": "Wie fragt man „Was machst du?“ mit diesem Verb?",
-    },
-    "it": {
-        "name": "🇮🇹 Italiano",
-        "choose": "Scegli la tua lingua:",
-        "welcome": (
-            "Ottimo! Scegli un verbo da praticare usando i pulsanti in basso:"
-        ),
-        "choose_btn": "Per favore, scegli un verbo usando i pulsanti:",
-        "correct": "Corretto! 🎉",
-        "fire": "Ottimo! 🔥",
-        "finish": "🎉 Ottimo lavoro! 3 passaggi completati! Scegli un nuovo verbo:",
-        "retry": "Non proprio. Riprova per «{v}»:",
-        "q1": "Passo 1: Qual è l'infinito per «{v}»?",
-        "q2": "Passo 2: Qual è la forma 'lui/lei' per «{v}»?",
-        "q3_eszik": "Come chiedere «Cosa mangi?» con questo verbo?",
-        "q3_iszik": "Come chiedere «Cosa bevi?» con questo verbo?",
-        "q3_ír": "Come chiedere «Cosa scrivi?» con questo verbo?",
-        "q3_olvas": "Come chiedere «Cosa leggi?» con questo verbo?",
-        "q3_lát": "Come chiedere «Cosa vedi?» con questo verbo?",
-        "q3_def": "Come chiedere «Cosa fai?» con questo verbo?",
-    },
-    "pl": {
-        "name": "🇵🇱 Polski",
-        "choose": "Wybierz swój język:",
-        "welcome": "Świetnie! Wybierz czasownik do ćwiczeń za pomocą przycisków:",
-        "choose_btn": "Proszę wybrać czasownik za pomocą przycisków:",
-        "correct": "Dobrze! 🎉",
-        "fire": "Świetnie! 🔥",
-        "finish": "🎉 Super! Wszystko zrobione! Wybierz nowy czasownik:",
-        "retry": "Nie do końca. Spróbuj ponownie dla «{v}»:",
-        "q1": "Krok 1: Jaki jest bezokolicznik dla «{v}»?",
-        "q2": "Krok 2: Jaka jest forma 'on/ona' dla «{v}»?",
-        "q3_eszik": "Jak zapytać „Co jesz?” tym czasownikiem?",
-        "q3_iszik": "Jak zapytać „Co pijesz?” tym czasownikiem?",
-        "q3_ír": "Jak zapytać „Co piszesz?” tym czasownikiem?",
-        "q3_olvas": "Jak zapytać „Co czytasz?” tym czasownikiem?",
-        "q3_lát": "Jak zapytać „Co widzisz?” tym czasownikiem?",
-        "q3_def": "Jak zapytać „Co robisz?” tym czasownikiem?",
     },
     "uk": {
         "name": "🇺🇦 Українська",
@@ -191,54 +94,17 @@ LANGUAGES = {
         "q3_olvas": "Як спитати «Що ти читаєш?» з цим дієсловом?",
         "q3_lát": "Як спитати «Що ти бачиш?» з цим дієсловом?",
         "q3_def": "Як спитати «Що ти робиш?» з цим дієсловом?",
-    },
-    "zh": {
-        "name": "🇨🇳 中文",
-        "choose": "请选择您的语言：",
-        "welcome": "太好了！请使用下方的按钮选择要练习的动词：",
-        "choose_btn": "请使用按钮选择动词：",
-        "correct": "正确！🎉",
-        "fire": "太棒了！🔥",
-        "finish": "🎉 太棒了！3个步骤已全部完成！请选择新动词：",
-        "retry": "不太对。请再试一次「{v}」：",
-        "q1": "第一步：「{v}」的不定式是什么？",
-        "q2": "第二步：「{v}」的第三人称（他/她）形式是什么？",
-        "q3_eszik": "如何用这个动词问“你在吃什么？”？",
-        "q3_iszik": "如何用这个动词问“你在喝什么？”？",
-        "q3_ír": "如何用这个动词问“你在写什么？”？",
-        "q3_olvas": "如何用这个动词问“你在读什么？”？",
-        "q3_lát": "如何用这个动词问“你看到了什么？”？",
-        "q3_def": "如何用这个动词问“你在做什么？”？",
-    },
-    "pt": {
-        "name": "🇵🇹 Português",
-        "choose": "Escolha o seu idioma:",
-        "welcome": "Ótimo! Escolha um verbo para praticar usando os botões abaixo:",
-        "choose_btn": "Por favor, escolha um verbo usando os botões:",
-        "correct": "Correto! 🎉",
-        "fire": "Excelente! 🔥",
-        "finish": "🎉 Parabéns! 3 etapas concluídas! Escolha um novo verbo:",
-        "retry": "Não exatamente. Tente novamente para «{v}»:",
-        "q1": "Passo 1: Qual é o infinitivo para «{v}»?",
-        "q2": "Passo 2: Qual é a forma de ele/ela para «{v}»?",
-        "q3_eszik": "Como perguntar «O que você está comendo?» com este verbo?",
-        "q3_iszik": "Como perguntar «O que você está bebendo?» com este verbo?",
-        "q3_ír": "Como perguntar «O que você está escrevendo?» com este verbo?",
-        "q3_olvas": "Como perguntar «O que você está lendo?» com este verbo?",
-        "q3_lát": "Como perguntar «O que você vê?» com este verbo?",
-        "q3_def": "Como perguntar «O que você está fazendo?» com este verbo?",
+        "morning": "☀️ Доброго ранку! Час повторити угорські дієслова?",
+        "day": "☕️ Як проходить день? Давай розімнемося і повторимо пару дієслів!",
+        "evening": "🌙 Вечірнє повторення! Не забудь закріпити дієслова перед сном.",
     },
 }
 
 
 def get_language_keyboard():
   markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-  keys = list(LANGUAGES.keys())
-  for i in range(0, len(keys), 2):
-    row = [KeyboardButton(text=LANGUAGES[keys[i]]["name"])]
-    if i + 1 < len(keys):
-      row.append(KeyboardButton(text=LANGUAGES[keys[i + 1]]["name"]))
-    markup.add(*row)
+  for code, data in LANGUAGES.items():
+    markup.add(KeyboardButton(text=data["name"]))
   return markup
 
 
@@ -248,10 +114,8 @@ def get_verbs_keyboard(lang="ru"):
   for hu, ru, en, inf in selected:
     if lang == "en":
       label = f"{hu} ({en})"
-    elif lang == "ru" or lang == "uk":
-      label = f"{hu} ({ru})"
     else:
-      label = f"{hu} ({en})"
+      label = f"{hu} ({ru})"
     markup.add(KeyboardButton(text=label))
   return markup
 
@@ -300,6 +164,7 @@ def send_reply(chat_id, text_main, spoiler_word=""):
 @bot.message_handler(commands=["start", "reset", "verbs"])
 def cmd_start(message):
   user_id = message.from_user.id
+  all_users.add(user_id)
   active_trainings[user_id] = {"lang": None, "step": 0}
 
   bot.send_message(
@@ -312,10 +177,10 @@ def cmd_start(message):
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
   user_id = message.from_user.id
+  all_users.add(user_id)
   text = message.text.strip()
   text_lower = text.lower()
 
-  # 1. Проверяем выбор языка
   if (
       user_id not in active_trainings
       or active_trainings[user_id].get("lang") is None
@@ -327,7 +192,7 @@ def handle_all_messages(message):
         break
 
     active_trainings[user_id] = {"lang": selected_lang, "step": 0}
-    l_data = LANGUAGES[selected_lang]
+    l_data = LANGUAGES.get(selected_lang, LANGUAGES["ru"])
 
     bot.send_message(
         message.chat.id,
@@ -338,9 +203,8 @@ def handle_all_messages(message):
 
   data = active_trainings[user_id]
   lang = data["lang"]
-  l_data = LANGUAGES[lang]
+  l_data = LANGUAGES.get(lang, LANGUAGES["ru"])
 
-  # 2. Если ждем выбор глагола
   if "verb_hu" not in data:
     found_verb = None
     for hu, ru, en, inf in VERBS_DATABASE:
@@ -356,9 +220,7 @@ def handle_all_messages(message):
       data["inf"] = inf
       data["step"] = 1
 
-      verb_name = (
-          ru if lang in ["ru", "uk"] else (en if lang != "ru" else hu)
-      )
+      verb_name = ru if lang in ["ru", "uk"] else (en if lang != "ru" else hu)
       q_text = l_data["q1"].format(v=verb_name)
       send_reply(message.chat.id, q_text, inf)
     else:
@@ -369,7 +231,6 @@ def handle_all_messages(message):
       )
     return
 
-  # 3. Активная тренировка по шагам
   step = data["step"]
   hu = data["verb_hu"]
   ru = data["verb_ru"]
@@ -462,7 +323,34 @@ def handle_all_messages(message):
     send_reply(message.chat.id, retry_text, spoiler)
 
 
-print("Réka запущена с поддержкой топ-10 мировых языков...")
+# Фоновый поток для отправки утренних, дневных и вечерних напоминаний
+def daily_reminders_loop():
+  while True:
+    now_hour = time.localtime().tm_hour
+    # Отправляем в 9:00 (утро), 14:00 (день), 20:00 (вечер)
+    if now_hour in [9, 14, 20]:
+      time_key = "morning" if now_hour == 9 else ("day" if now_hour == 14 else "evening")
+      for user_id in list(all_users):
+        try:
+          user_lang = active_trainings.get(user_id, {}).get("lang", "ru")
+          l_data = LANGUAGES.get(user_lang, LANGUAGES["ru"])
+          bot.send_message(
+              user_id,
+              l_data[time_key],
+              reply_markup=get_verbs_keyboard(user_lang),
+          )
+        except Exception as e:
+          print(f"Ошибка отправки напоминания пользователю {user_id}: {e}")
+      # Ждем больше часа, чтобы сообщение не отправилось дважды в тот же час
+      time.sleep(3700)
+    else:
+      time.sleep(600)
+
+
+# Запускаем фоновый поток рассылки
+threading.Thread(target=daily_reminders_loop, daemon=True).start()
+
+print("Река запущена с рассылкой (утро, день, вечер) и языками...")
 
 while True:
   try:
