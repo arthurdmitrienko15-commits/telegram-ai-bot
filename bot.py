@@ -8,9 +8,7 @@ from telebot.types import KeyboardButton, ReplyKeyboardMarkup
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# Храним состояние: {user_id: {"lang": "ru/en/...", "step": 0}}
 active_trainings = {}
-# Список активных пользователей для рассылки
 all_users = set()
 
 VERBS_DATABASE = [
@@ -27,7 +25,6 @@ VERBS_DATABASE = [
 LANGUAGES = {
     "ru": {
         "name": "🇷🇺 Русский",
-        "choose": "Выберите язык интерфейса:",
         "welcome": (
             "Отлично! Выбери глагол для тренировки с помощью кнопок внизу:"
         ),
@@ -38,19 +35,20 @@ LANGUAGES = {
         "retry": "Не совсем так. Попробуй еще раз для глагола «{v}»:",
         "q1": "Шаг 1: Как будет глагол «{v}» в начальной форме (инфинитив)?",
         "q2": "Шаг 2: Как будет «он / она делает» для глагола «{v}»?",
-        "q3_eszik": "Как спросить «Что ты ешь?» с этим глаголом?",
-        "q3_iszik": "Как спросить «Что ты пьешь?» с этим глаголом?",
-        "q3_ír": "Как спросить «Что ты пишешь?» с этим глаголом?",
-        "q3_olvas": "Как спросить «Что ты читаешь?» с этим глаголом?",
-        "q3_lát": "Как спросить «Что ты видишь?» с этим глаголом?",
-        "q3_def": "Как спросить «Что ты делаешь?» с этим глаголом?",
+        "q3_eszik": "Шаг 3: Как спросить «Что ты ешь?» с этим глаголом?",
+        "q3_iszik": "Шаг 3: Как спросить «Что ты пьешь?» с этим глаголом?",
+        "q3_ír": "Шаг 3: Как спросить «Что ты пишешь?» с этим глаголом?",
+        "q3_olvas": "Шаг 3: Как спросить «Что ты читаешь?» с этим глаголом?",
+        "q3_lát": "Шаг 3: Как спросить «Что ты видишь?» с этим глаголом?",
+        "q3_hall": "Шаг 3: Как спросить «Что ты слышишь?» с этим глаголом?",
+        "q3_vesz": "Шаг 3: Как спросить «Что ты покупаешь / берешь?» с этим глаголом?",
+        "q3_csinál": "Шаг 3: Как спросить «Что ты делаешь?» с этим глаголом?",
         "morning": "☀️ Доброе утро! Время повторить венгерские глаголы?",
         "day": "☕️ Как проходит день? Давай разомнемся и повторим пару глаголов!",
         "evening": "🌙 Вечернее повторение! Не забудь закрепить глаголы перед сном.",
     },
     "en": {
         "name": "🇬🇧 English",
-        "choose": "Choose your language:",
         "welcome": "Great! Choose a verb to practice using the buttons below:",
         "choose_btn": "Please choose a verb using the buttons:",
         "correct": "Correct! 🎉",
@@ -61,12 +59,14 @@ LANGUAGES = {
         "retry": "Not quite. Try again for «{v}»:",
         "q1": "Step 1: What is the infinitive form for «{v}»?",
         "q2": "Step 2: What is the 'he/she' form for «{v}»?",
-        "q3_eszik": "How to ask «What are you eating?» with this verb?",
-        "q3_iszik": "How to ask «What are you drinking?» with this verb?",
-        "q3_ír": "How to ask «What are you writing?» with this verb?",
-        "q3_olvas": "How to ask «What are you reading?» with this verb?",
-        "q3_lát": "How to ask «What do you see?» with this verb?",
-        "q3_def": "How to ask «What are you doing?» with this verb?",
+        "q3_eszik": "Step 3: How to ask «What are you eating?» with this verb?",
+        "q3_iszik": "Step 3: How to ask «What are you drinking?» with this verb?",
+        "q3_ír": "Step 3: How to ask «What are you writing?» with this verb?",
+        "q3_olvas": "Step 3: How to ask «What are you reading?» with this verb?",
+        "q3_lát": "Step 3: How to ask «What do you see?» with this verb?",
+        "q3_hall": "Step 3: How to ask «What do you hear?» with this verb?",
+        "q3_vesz": "Step 3: How to ask «What are you buying?» with this verb?",
+        "q3_csinál": "Step 3: How to ask «What are you doing?» with this verb?",
         "morning": "☀️ Good morning! Time to practice Hungarian verbs?",
         "day": "☕️ How is your day going? Let's practice a few verbs!",
         "evening": (
@@ -75,7 +75,6 @@ LANGUAGES = {
     },
     "uk": {
         "name": "🇺🇦 Українська",
-        "choose": "Виберіть мову інтерфейсу:",
         "welcome": (
             "Чудово! Вибери дієслово для тренування за допомогою кнопок внизу:"
         ),
@@ -88,12 +87,14 @@ LANGUAGES = {
         "retry": "Не зовсім так. Спробуй ще раз для дієслова «{v}»:",
         "q1": "Крок 1: Як буде дієслово «{v}» в початковій формі (інфінітив)?",
         "q2": "Крок 2: Як буде «він / вона робить» для дієслова «{v}»?",
-        "q3_eszik": "Як спитати «Що ти їшь?» з цим дієсловом?",
-        "q3_iszik": "Як спитати «Що ти п'єш?» з цим дієсловом?",
-        "q3_ír": "Як спитати «Що ти пишеш?» з цим дієсловом?",
-        "q3_olvas": "Як спитати «Що ти читаєш?» з цим дієсловом?",
-        "q3_lát": "Як спитати «Що ти бачиш?» з цим дієсловом?",
-        "q3_def": "Як спитати «Що ти робиш?» з цим дієсловом?",
+        "q3_eszik": "Крок 3: Як спитати «Що ти їш?» з цим дієсловом?",
+        "q3_iszik": "Крок 3: Як спитати «Що ти п'єш?» з цим дієсловом?",
+        "q3_ír": "Крок 3: Як спитати «Що ти пишеш?» з цим дієсловом?",
+        "q3_olvas": "Крок 3: Як спитати «Що ти читаєш?» з цим дієсловом?",
+        "q3_lát": "Крок 3: Як спитати «Що ти бачиш?» з цим дієсловом?",
+        "q3_hall": "Крок 3: Як спитати «Що ти чуєш?» з цим дієсловом?",
+        "q3_vesz": "Крок 3: Як спитати «Що ти купуєш / береш?» з цим дієсловом?",
+        "q3_csinál": "Крок 3: Як спитати «Що ти робиш?» з цим дієсловом?",
         "morning": "☀️ Доброго ранку! Час повторити угорські дієслова?",
         "day": "☕️ Як проходить день? Давай розімнемося і повторимо пару дієслів!",
         "evening": "🌙 Вечірнє повторення! Не забудь закріпити дієслова перед сном.",
@@ -238,6 +239,7 @@ def handle_all_messages(message):
   inf = data["inf"]
   verb_name = ru if lang in ["ru", "uk"] else (en if lang != "ru" else hu)
 
+  # Точное определение правильного ответа на каждом шаге
   if step == 1:
     correct = inf
   elif step == 2:
@@ -285,18 +287,9 @@ def handle_all_messages(message):
       q2_text = l_data["q2"].format(v=verb_name)
       send_reply(message.chat.id, f"{l_data['correct']}\n\n{q2_text}", hu)
     elif next_step == 3:
-      if hu == "eszik":
-        q3_text = l_data["q3_eszik"]
-      elif hu == "iszik":
-        q3_text = l_data["q3_iszik"]
-      elif hu == "ír":
-        q3_text = l_data["q3_ír"]
-      elif hu == "olvas":
-        q3_text = l_data["q3_olvas"]
-      elif hu == "lát":
-        q3_text = l_data["q3_lát"]
-      else:
-        q3_text = l_data["q3_def"]
+      # Жестко берем уникальный вопрос Шага 3 под каждый глагол из словаря
+      q3_key = f"q3_{hu}"
+      q3_text = l_data.get(q3_key, l_data["q3_csinál"])
 
       send_reply(message.chat.id, f"{l_data['fire']}\n\n{q3_text}", correct)
     else:
@@ -323,11 +316,9 @@ def handle_all_messages(message):
     send_reply(message.chat.id, retry_text, spoiler)
 
 
-# Фоновый поток для отправки утренних, дневных и вечерних напоминаний
 def daily_reminders_loop():
   while True:
     now_hour = time.localtime().tm_hour
-    # Отправляем в 9:00 (утро), 14:00 (день), 20:00 (вечер)
     if now_hour in [9, 14, 20]:
       time_key = "morning" if now_hour == 9 else ("day" if now_hour == 14 else "evening")
       for user_id in list(all_users):
@@ -341,16 +332,14 @@ def daily_reminders_loop():
           )
         except Exception as e:
           print(f"Ошибка отправки напоминания пользователю {user_id}: {e}")
-      # Ждем больше часа, чтобы сообщение не отправилось дважды в тот же час
       time.sleep(3700)
     else:
       time.sleep(600)
 
 
-# Запускаем фоновый поток рассылки
 threading.Thread(target=daily_reminders_loop, daemon=True).start()
 
-print("Река запущена с рассылкой (утро, день, вечер) и языками...")
+print("Река запущена без багов на 3 шаге...")
 
 while True:
   try:
