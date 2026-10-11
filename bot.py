@@ -68,7 +68,7 @@ CONJ = {
     "kér": ("kérek", "kérsz", "kérünk", "kérnek", "kért"),
     "tanul": ("tanulok", "tanulsz", "tanulunk", "tanulnak", "tanult"),
     "dolgozik": ("dolgozom", "dolgozol", "dolgozunk", "dolgoznak", "dolgozott"),
-    "lakik": ("lakom", "lakol", "lakunk", "laknak", "lakott"),
+    "lakik": ("lakom", "laksz", "lakunk", "laknak", "lakott"),
     "beszél": ("beszélek", "beszélsz", "beszélünk", "beszélnek", "beszélt"),
     "tud": ("tudok", "tudsz", "tudunk", "tudnak", "tudott"),
     "akar": ("akarok", "akarsz", "akarunk", "akarnak", "akart"),
@@ -107,6 +107,89 @@ PAST_TE = {
 
 # Шаги, которые подаются как вопрос (со знаком «?» в подсказке)
 QUESTION_KEYS = {"te", "past_te", "f_te"}
+
+# Допустимые разговорные варианты формы «te»
+ALT_TE = {"lakik": ["lakol"]}
+
+# Определённое спряжение (én, te) — для вопроса «Какой ты ищешь?» -> melyiket keresed?
+DEF_CONJ = {
+    "csinál": ("csinálom", "csinálod"),
+    "olvas": ("olvasom", "olvasod"),
+    "ír": ("írom", "írod"),
+    "eszik": ("eszem", "eszed"),
+    "iszik": ("iszom", "iszod"),
+    "lát": ("látom", "látod"),
+    "hall": ("hallom", "hallod"),
+    "vesz": ("veszem", "veszed"),
+    "kér": ("kérem", "kéred"),
+    "tanul": ("tanulom", "tanulod"),
+    "tud": ("tudom", "tudod"),
+    "akar": ("akarom", "akarod"),
+    "főz": ("főzöm", "főzöd"),
+    "szeret": ("szeretem", "szereted"),
+    "ad": ("adom", "adod"),
+    "kap": ("kapom", "kapod"),
+    "nyit": ("nyitom", "nyitod"),
+    "keres": ("keresem", "keresed"),
+    "fizet": ("fizetem", "fizeted"),
+    "tesz": ("teszem", "teszed"),
+}
+
+# Вопросительные слова, которые осмысленно сочетаются с глаголом:
+#   mit = что, hol = где, kit = кого, melyik = какой, hova = куда
+WH = {
+    "csinál": ["mit", "melyik"],
+    "olvas": ["mit", "hol", "melyik"],
+    "ír": ["mit", "hol", "melyik"],
+    "eszik": ["mit", "hol", "melyik"],
+    "iszik": ["mit", "hol", "melyik"],
+    "lát": ["mit", "kit", "melyik"],
+    "hall": ["mit", "kit", "melyik"],
+    "vesz": ["mit", "hol", "melyik"],
+    "kér": ["mit", "melyik"],
+    "tanul": ["mit", "hol", "melyik"],
+    "dolgozik": ["hol"],
+    "lakik": ["hol"],
+    "beszél": ["hol"],
+    "tud": ["mit", "melyik"],
+    "akar": ["mit", "kit", "melyik"],
+    "megy": ["hova"],
+    "jön": ["hova"],
+    "alszik": ["hol"],
+    "főz": ["mit", "hol", "melyik"],
+    "szeret": ["mit", "kit", "melyik"],
+    "ad": ["mit", "melyik"],
+    "kap": ["mit", "melyik"],
+    "fut": ["hol", "hova"],
+    "nyit": ["mit", "melyik"],
+    "vár": ["mit", "kit", "hol"],
+    "keres": ["mit", "hol", "kit", "melyik"],
+    "játszik": ["mit", "hol"],
+    "fizet": ["mit", "hol", "melyik"],
+    "segít": ["hol"],
+    "tesz": ["mit", "melyik"],
+}
+
+# Венгерское слово в ответе («melyik» требует винительного: melyiket)
+WH_HU = {"mit": "mit", "hol": "hol", "kit": "kit", "melyik": "melyiket", "hova": "hova"}
+
+# Вопросительные слова на языках интерфейса (для языков без естественных фраз)
+WH_LABELS = {
+    "ru": {"mit": "что", "hol": "где", "kit": "кого", "melyik": "какой", "hova": "куда"},
+    "en": {"mit": "what", "hol": "where", "kit": "who", "melyik": "which one", "hova": "where to"},
+    "es": {"mit": "qué", "hol": "dónde", "kit": "a quién", "melyik": "cuál", "hova": "adónde"},
+    "fr": {"mit": "quoi", "hol": "où", "kit": "qui", "melyik": "lequel", "hova": "vers où"},
+    "de": {"mit": "was", "hol": "wo", "kit": "wen", "melyik": "welchen", "hova": "wohin"},
+    "it": {"mit": "cosa", "hol": "dove", "kit": "chi", "melyik": "quale", "hova": "verso dove"},
+    "pl": {"mit": "co", "hol": "gdzie", "kit": "kogo", "melyik": "który", "hova": "dokąd"},
+    "uk": {"mit": "що", "hol": "де", "kit": "кого", "melyik": "який", "hova": "куди"},
+    "zh": {"mit": "什么", "hol": "哪里", "kit": "谁", "melyik": "哪个", "hova": "去哪里"},
+    "pt": {"mit": "o que", "hol": "onde", "kit": "quem", "melyik": "qual", "hova": "para onde"},
+}
+
+
+def is_question(key):
+    return key in QUESTION_KEYS or key.startswith("wh_")
 
 # Русские формы для естественных фраз: я, ты, мы, они (настоящее время)
 RU_PRES = {
@@ -183,7 +266,12 @@ def _cap(s):
 
 def ru_natural(key, hu, ru, en, l_data):
     """Естественная русская фраза: «Я буду работать», «Ты работал(а)?» ..."""
-    if key == "ő":
+    if key.startswith("wh_"):  # «Что ты ищешь?», «Где я работаю?» ...
+        _, w, p = key.split("_")
+        pron = "ты" if p == "te" else "я"
+        verb = RU_PRES[hu][1 if p == "te" else 0]
+        s = f"{WH_LABELS['ru'][w]} {pron} {verb}"
+    elif key == "ő":
         s = f"он / она {l_data['forms'][hu]}"
     elif key in _PRES_IDX:
         s = f"{_RU_PRON[key]} {RU_PRES[hu][_PRES_IDX[key]]}"
@@ -193,7 +281,7 @@ def ru_natural(key, hu, ru, en, l_data):
         s = f"ты {RU_PAST[hu]}"
     else:  # f_ő, f_én, f_te, f_ők
         s = f"{_RU_BUDU[key[2:]]} {ru}"
-    if key in QUESTION_KEYS:
+    if is_question(key):
         s += "?"
     return _cap(s)
 
@@ -201,7 +289,14 @@ def ru_natural(key, hu, ru, en, l_data):
 def en_natural(key, hu, ru, en, l_data):
     """Естественная английская фраза: «I will work», «Did you work?» ..."""
     bare = en[3:] if en.startswith("to ") else en
-    if key == "ő":
+    if key.startswith("wh_"):  # «What do you look for?», «Where do I work?» ...
+        _, w, p = key.split("_")
+        pron = "you" if p == "te" else "I"
+        if w == "hova":
+            s = f"where do {pron} {bare} to"
+        else:
+            s = f"{WH_LABELS['en'][w]} do {pron} {bare}"
+    elif key == "ő":
         s = f"he / she {l_data['forms'][hu]}"
     elif key == "te":
         s = f"do you {bare}"
@@ -219,7 +314,7 @@ def en_natural(key, hu, ru, en, l_data):
             s = f"he / she will {bare}"
         else:
             s = f"{_EN_PRON[who]} will {bare}"
-    if key in QUESTION_KEYS:
+    if is_question(key):
         s += "?"
     return _cap(s)
 
@@ -231,7 +326,7 @@ NATURAL = {"ru": ru_natural, "en": en_natural}
 def hint_for(key, hu, inf):
     """Подсказка под спойлером; у вопросов («ты ...?») добавляем «?»."""
     a = answers_for(key, hu, inf)[0]
-    if key in QUESTION_KEYS and not a.endswith("?"):
+    if is_question(key) and not a.endswith("?"):
         a += "?"
     return a
 
@@ -591,11 +686,11 @@ def strip_pronoun(text):
 
 
 def build_steps(hu, l_data):
-    steps = ["inf", "ő"]
-    if hu in l_data["phrases"]:
-        steps.append("q")  # вопрос «Что ты ...?»
+    steps = ["inf", "ő", "én", "te", "mi", "ők"]
+    # вопросы с вопросительным словом: «Что ты ищешь?», «Где я ищу?» ...
+    for w in WH.get(hu, []):
+        steps += [f"wh_{w}_te", f"wh_{w}_én"]
     steps += [
-        "én", "te", "mi", "ők",
         "past", "past_te",
         "f_ő", "f_én", "f_te", "f_ők",
     ]
@@ -609,12 +704,20 @@ def answers_for(key, hu, inf):
         return [inf]
     if key == "ő":
         return [hu]
-    if key == "q":
-        return [STEP3_ANSWERS[hu]]
+    if key.startswith("wh_"):
+        _, w, p = key.split("_")
+        if w == "melyik":
+            form = DEF_CONJ[hu][0 if p == "én" else 1]
+            forms = [form]
+        elif p == "én":
+            forms = [én]
+        else:
+            forms = [te] + ALT_TE.get(hu, [])
+        return [f"{WH_HU[w]} {f}?" for f in forms]
     if key == "én":
         return [én]
     if key == "te":
-        return [te]
+        return [te] + ALT_TE.get(hu, [])
     if key == "mi":
         return [mi]
     if key == "ők":
@@ -638,7 +741,7 @@ def make_question(l_data, lang, steps, step, verb):
 
     if key == "inf":
         body = l_data["q1"].format(v=v)
-    elif key == "q":
+    elif key == "wh_mit_te" and lang not in NATURAL and hu in l_data["phrases"]:
         body = l_data["q3"].format(p=l_data["phrases"][hu])
     elif lang in NATURAL:
         body = l_data["qn"].format(s=NATURAL[lang](key, hu, ru, en, l_data))
@@ -649,6 +752,9 @@ def make_question(l_data, lang, steps, step, verb):
             who = f"{pron['ő']} ({l_data['past']})"
         elif key == "past_te":
             who = f"{pron['te']} ({l_data['past']})"
+        elif key.startswith("wh_"):
+            _, w, p = key.split("_")
+            who = f"{WH_LABELS[lang][w]} + {pron[p]}"
         elif key.startswith("f_"):
             who = f"{pron[key[2:]]} ({l_data['future']})"
         else:
