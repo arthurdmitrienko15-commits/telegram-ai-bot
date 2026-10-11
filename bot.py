@@ -916,7 +916,7 @@ CARD_CONFLICTS = {
     "gondolkodik": {"tanul", "tud", "akar"},
     "fut": {"megy", "jön"},
     "ír": {"gépel", "rajzol", "tanul", "dolgozik", "olvas"},
-    "gépel": {"ír", "dolgozik", "játszik"},
+    "dolgozik": {"ír", "dolgozik", "játszik"},
     "rajzol": {"ír", "játszik", "dolgozik"},
     "tanul": {"olvas", "ír", "gondolkodik", "dolgozik"},
 }
