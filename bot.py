@@ -14,6 +14,9 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
 
+# Сколько последних выученных глаголов не показывать на кнопках
+RECENT_LIMIT = 6
+
 active_trainings = {}
 all_users = set()
 
@@ -27,11 +30,69 @@ VERBS_DATABASE = [
     ("lát", "видеть", "to see", "látni"),
     ("hall", "слышать", "to hear", "hallani"),
     ("vesz", "брать / покупать", "to buy", "venni"),
+    ("kér", "просить", "to ask for", "kérni"),
+    ("tanul", "учить", "to learn", "tanulni"),
+    ("dolgozik", "работать", "to work", "dolgozni"),
+    ("lakik", "жить", "to live", "lakni"),
+    ("beszél", "говорить", "to speak", "beszélni"),
+    ("tud", "знать / уметь", "to know / can", "tudni"),
+    ("akar", "хотеть", "to want", "akarni"),
+    ("megy", "идти / ехать", "to go", "menni"),
+    ("jön", "приходить", "to come", "jönni"),
+    ("alszik", "спать", "to sleep", "aludni"),
+    ("főz", "готовить", "to cook", "főzni"),
+    ("szeret", "любить", "to love / like", "szeretni"),
+    ("ad", "давать", "to give", "adni"),
+    ("kap", "получать", "to get", "kapni"),
+    ("fut", "бежать", "to run", "futni"),
+    ("nyit", "открывать", "to open", "nyitni"),
+    ("vár", "ждать", "to wait", "várni"),
+    ("keres", "искать", "to look for", "keresni"),
+    ("játszik", "играть", "to play", "játszani"),
+    ("fizet", "платить", "to pay", "fizetni"),
+    ("segít", "помогать", "to help", "segíteni"),
+    ("tesz", "класть / ставить", "to put", "tenni"),
 ]
 
-ORDER = ["csinál", "olvas", "ír", "eszik", "iszik", "lát", "hall", "vesz"]
+# Спряжение: глагол -> (én, te, mi, ők, прошедшее «ő»)
+# Форма «ő» (он/она) = сам ключ.
+CONJ = {
+    "csinál": ("csinálok", "csinálsz", "csinálunk", "csinálnak", "csinált"),
+    "olvas": ("olvasok", "olvasol", "olvasunk", "olvasnak", "olvasott"),
+    "ír": ("írok", "írsz", "írunk", "írnak", "írt"),
+    "eszik": ("eszem", "eszel", "eszünk", "esznek", "evett"),
+    "iszik": ("iszom", "iszol", "iszunk", "isznak", "ivott"),
+    "lát": ("látok", "látsz", "látunk", "látnak", "látott"),
+    "hall": ("hallok", "hallasz", "hallunk", "hallanak", "hallott"),
+    "vesz": ("veszek", "veszel", "veszünk", "vesznek", "vett"),
+    "kér": ("kérek", "kérsz", "kérünk", "kérnek", "kért"),
+    "tanul": ("tanulok", "tanulsz", "tanulunk", "tanulnak", "tanult"),
+    "dolgozik": ("dolgozom", "dolgozol", "dolgozunk", "dolgoznak", "dolgozott"),
+    "lakik": ("lakom", "lakol", "lakunk", "laknak", "lakott"),
+    "beszél": ("beszélek", "beszélsz", "beszélünk", "beszélnek", "beszélt"),
+    "tud": ("tudok", "tudsz", "tudunk", "tudnak", "tudott"),
+    "akar": ("akarok", "akarsz", "akarunk", "akarnak", "akart"),
+    "megy": ("megyek", "mész", "megyünk", "mennek", "ment"),
+    "jön": ("jövök", "jössz", "jövünk", "jönnek", "jött"),
+    "alszik": ("alszom", "alszol", "alszunk", "alszanak", "aludt"),
+    "főz": ("főzök", "főzöl", "főzünk", "főznek", "főzött"),
+    "szeret": ("szeretek", "szeretsz", "szeretünk", "szeretnek", "szeretett"),
+    "ad": ("adok", "adsz", "adunk", "adnak", "adott"),
+    "kap": ("kapok", "kapsz", "kapunk", "kapnak", "kapott"),
+    "fut": ("futok", "futsz", "futunk", "futnak", "futott"),
+    "nyit": ("nyitok", "nyitsz", "nyitunk", "nyitnak", "nyitott"),
+    "vár": ("várok", "vársz", "várunk", "várnak", "várt"),
+    "keres": ("keresek", "keresel", "keresünk", "keresnek", "keresett"),
+    "játszik": ("játszom", "játszol", "játszunk", "játszanak", "játszott"),
+    "fizet": ("fizetek", "fizetsz", "fizetünk", "fizetnek", "fizetett"),
+    "segít": ("segítek", "segítesz", "segítünk", "segítenek", "segített"),
+    "tesz": ("teszek", "teszel", "teszünk", "tesznek", "tett"),
+}
 
-# Правильные ответы для шага 3 (полная фраза)
+# Будущее время: fog + инфинитив
+FOG = {"ő": "fog", "én": "fogok", "te": "fogsz", "ők": "fognak"}
+
+# Вопрос «Что ты ...?» — только для глаголов, у которых есть объект
 STEP3_ANSWERS = {
     "csinál": "mit csinálsz?",
     "olvas": "mit olvasol?",
@@ -43,6 +104,8 @@ STEP3_ANSWERS = {
     "vesz": "mit veszel?",
 }
 
+ORDER = ["csinál", "olvas", "ír", "eszik", "iszik", "lát", "hall", "vesz"]
+
 
 def L(forms, phrases):
     return dict(zip(ORDER, forms)), dict(zip(ORDER, phrases))
@@ -53,17 +116,43 @@ _ru_forms, _ru_phr = L(
     ["Что ты делаешь?", "Что ты читаешь?", "Что ты пишешь?", "Что ты ешь?",
      "Что ты пьёшь?", "Что ты видишь?", "Что ты слышишь?", "Что ты покупаешь?"],
 )
+_ru_forms.update({
+    "kér": "просит", "tanul": "учит", "dolgozik": "работает", "lakik": "живёт",
+    "beszél": "говорит", "tud": "знает / умеет", "akar": "хочет",
+    "megy": "идёт / едет", "jön": "приходит", "alszik": "спит",
+    "főz": "готовит", "szeret": "любит", "ad": "даёт", "kap": "получает",
+    "fut": "бежит", "nyit": "открывает", "vár": "ждёт", "keres": "ищет",
+    "játszik": "играет", "fizet": "платит", "segít": "помогает",
+    "tesz": "кладёт / ставит",
+})
 _uk_forms, _uk_phr = L(
     ["робить", "читає", "пише", "їсть", "п'є", "бачить", "чує", "купує"],
     ["Що ти робиш?", "Що ти читаєш?", "Що ти пишеш?", "Що ти їси?",
      "Що ти п'єш?", "Що ти бачиш?", "Що ти чуєш?", "Що ти купуєш?"],
 )
+_uk_forms.update({
+    "kér": "просить", "tanul": "вчить", "dolgozik": "працює", "lakik": "живе",
+    "beszél": "говорить", "tud": "знає / вміє", "akar": "хоче",
+    "megy": "йде / їде", "jön": "приходить", "alszik": "спить",
+    "főz": "готує", "szeret": "любить", "ad": "дає", "kap": "отримує",
+    "fut": "біжить", "nyit": "відкриває", "vár": "чекає", "keres": "шукає",
+    "játszik": "грає", "fizet": "платить", "segít": "допомагає",
+    "tesz": "кладе / ставить",
+})
 _en_forms, _en_phr = L(
     ["does", "reads", "writes", "eats", "drinks", "sees", "hears", "buys"],
     ["What are you doing?", "What are you reading?", "What are you writing?",
      "What are you eating?", "What are you drinking?", "What do you see?",
      "What do you hear?", "What are you buying?"],
 )
+_en_forms.update({
+    "kér": "asks for", "tanul": "learns", "dolgozik": "works", "lakik": "lives",
+    "beszél": "speaks", "tud": "knows", "akar": "wants", "megy": "goes",
+    "jön": "comes", "alszik": "sleeps", "főz": "cooks", "szeret": "loves",
+    "ad": "gives", "kap": "gets", "fut": "runs", "nyit": "opens",
+    "vár": "waits", "keres": "looks for", "játszik": "plays", "fizet": "pays",
+    "segít": "helps", "tesz": "puts",
+})
 _es_forms, _es_phr = L(
     ["hace", "lee", "escribe", "come", "bebe", "ve", "oye", "compra"],
     ["¿Qué haces?", "¿Qué lees?", "¿Qué escribes?", "¿Qué comes?",
@@ -104,6 +193,7 @@ _pt_forms, _pt_phr = L(
      "O que você está comprando?"],
 )
 
+# pron: я, ты, он/она, мы, они — для вопросов вида «я + глагол»
 LANGUAGES = {
     "ru": {
         "name": "🇷🇺 Русский",
@@ -111,11 +201,16 @@ LANGUAGES = {
         "choose_btn": "Пожалуйста, выбери глагол с помощью кнопок:",
         "correct": "Правильно! 🎉",
         "fire": "Отлично! 🔥",
-        "finish": "🎉 Молодчина! Все 3 шага пройдены! Выбери новый глагол:",
+        "finish": "🎉 Молодчина! Глагол пройден полностью! Выбери новый:",
         "retry": "Не совсем так. Попробуй ещё раз для глагола «{v}»:",
-        "q1": "Шаг 1: Как будет «{v}» по-венгерски?",
-        "q2": "Шаг 2: Как будет «он / она {f}»?",
-        "q3": "Шаг 3: Как будет «{p}»?",
+        "step": "Шаг {n}/{t}: ",
+        "q1": "Как будет «{v}» по-венгерски?",
+        "q2": "Как будет «он / она {f}»?",
+        "q3": "Как будет «{p}»?",
+        "qg": "Как будет: {who} + «{v}»?",
+        "pron": {"én": "я", "te": "ты", "ő": "он / она", "mi": "мы", "ők": "они"},
+        "past": "прошедшее",
+        "future": "будущее",
         "forms": _ru_forms,
         "phrases": _ru_phr,
         "morning": "☀️ Доброе утро! Время повторить венгерские глаголы?",
@@ -128,11 +223,16 @@ LANGUAGES = {
         "choose_btn": "Please choose a verb using the buttons:",
         "correct": "Correct! 🎉",
         "fire": "Great! 🔥",
-        "finish": "🎉 Awesome! All 3 steps completed! Choose a new verb:",
+        "finish": "🎉 Awesome! Verb completed! Choose a new one:",
         "retry": "Not quite. Try again for «{v}»:",
-        "q1": "Step 1: How do you say «{v}» in Hungarian?",
-        "q2": "Step 2: How do you say 'he/she {f}'?",
-        "q3": "Step 3: How do you say «{p}»?",
+        "step": "Step {n}/{t}: ",
+        "q1": "How do you say «{v}» in Hungarian?",
+        "q2": "How do you say 'he/she {f}'?",
+        "q3": "How do you say «{p}»?",
+        "qg": "How do you say: {who} + «{v}»?",
+        "pron": {"én": "I", "te": "you", "ő": "he / she", "mi": "we", "ők": "they"},
+        "past": "past",
+        "future": "future",
         "forms": _en_forms,
         "phrases": _en_phr,
         "morning": "☀️ Good morning! Time to practice Hungarian verbs?",
@@ -145,11 +245,16 @@ LANGUAGES = {
         "choose_btn": "Por favor, elige un verbo usando los botones:",
         "correct": "¡Correcto! 🎉",
         "fire": "¡Excelente! 🔥",
-        "finish": "🎉 ¡Increíble! ¡Los 3 pasos completados! Elige un nuevo verbo:",
+        "finish": "🎉 ¡Increíble! ¡Verbo completado! Elige uno nuevo:",
         "retry": "No exactamente. Inténtalo de nuevo para «{v}»:",
-        "q1": "Paso 1: ¿Cómo se dice «{v}» en húngaro?",
-        "q2": "Paso 2: ¿Cómo se dice «él/ella {f}»?",
-        "q3": "Paso 3: ¿Cómo se dice «{p}»?",
+        "step": "Paso {n}/{t}: ",
+        "q1": "¿Cómo se dice «{v}» en húngaro?",
+        "q2": "¿Cómo se dice «él/ella {f}»?",
+        "q3": "¿Cómo se dice «{p}»?",
+        "qg": "¿Cómo se dice: {who} + «{v}»?",
+        "pron": {"én": "yo", "te": "tú", "ő": "él / ella", "mi": "nosotros", "ők": "ellos"},
+        "past": "pasado",
+        "future": "futuro",
         "forms": _es_forms,
         "phrases": _es_phr,
         "morning": "☀️ ¡Buenos días! ¿Hora de repasar verbos?",
@@ -162,11 +267,16 @@ LANGUAGES = {
         "choose_btn": "Veuillez choisir un verbe en utilisant les boutons :",
         "correct": "Correct ! 🎉",
         "fire": "Excellent ! 🔥",
-        "finish": "🎉 Bravo ! Les 3 étapes sont terminées ! Choisissez un nouveau verbe :",
+        "finish": "🎉 Bravo ! Verbe terminé ! Choisissez-en un nouveau :",
         "retry": "Pas tout à fait. Réessayez pour «{v}» :",
-        "q1": "Étape 1 : Comment dit-on «{v}» en hongrois ?",
-        "q2": "Étape 2 : Comment dit-on « il/elle {f} » ?",
-        "q3": "Étape 3 : Comment dit-on « {p} » ?",
+        "step": "Étape {n}/{t} : ",
+        "q1": "Comment dit-on «{v}» en hongrois ?",
+        "q2": "Comment dit-on « il/elle {f} » ?",
+        "q3": "Comment dit-on « {p} » ?",
+        "qg": "Comment dit-on : {who} + «{v}» ?",
+        "pron": {"én": "je", "te": "tu", "ő": "il / elle", "mi": "nous", "ők": "ils"},
+        "past": "passé",
+        "future": "futur",
         "forms": _fr_forms,
         "phrases": _fr_phr,
         "morning": "☀️ Bonjour ! Il est temps de réviser les verbes ?",
@@ -179,11 +289,16 @@ LANGUAGES = {
         "choose_btn": "Bitte wähle ein Verb über die Buttons:",
         "correct": "Richtig! 🎉",
         "fire": "Super! 🔥",
-        "finish": "🎉 Geschafft! Alle 3 Schritte abgeschlossen! Wähle ein neues Verb:",
+        "finish": "🎉 Geschafft! Verb abgeschlossen! Wähle ein neues:",
         "retry": "Nicht ganz. Versuche es noch einmal für «{v}»:",
-        "q1": "Schritt 1: Wie sagt man «{v}» auf Ungarisch?",
-        "q2": "Schritt 2: Wie sagt man „er/sie {f}“?",
-        "q3": "Schritt 3: Wie sagt man „{p}“?",
+        "step": "Schritt {n}/{t}: ",
+        "q1": "Wie sagt man «{v}» auf Ungarisch?",
+        "q2": "Wie sagt man „er/sie {f}“?",
+        "q3": "Wie sagt man „{p}“?",
+        "qg": "Wie sagt man: {who} + «{v}»?",
+        "pron": {"én": "ich", "te": "du", "ő": "er / sie", "mi": "wir", "ők": "sie (Plural)"},
+        "past": "Vergangenheit",
+        "future": "Zukunft",
         "forms": _de_forms,
         "phrases": _de_phr,
         "morning": "☀️ Guten Morgen! Zeit, Verben zu üben?",
@@ -196,11 +311,16 @@ LANGUAGES = {
         "choose_btn": "Per favore, scegli un verbo usando i pulsanti:",
         "correct": "Corretto! 🎉",
         "fire": "Ottimo! 🔥",
-        "finish": "🎉 Ottimo lavoro! 3 passaggi completati! Scegli un nuovo verbo:",
+        "finish": "🎉 Ottimo lavoro! Verbo completato! Scegline uno nuovo:",
         "retry": "Non proprio. Riprova per «{v}»:",
-        "q1": "Passo 1: Come si dice «{v}» in ungherese?",
-        "q2": "Passo 2: Come si dice «lui/lei {f}»?",
-        "q3": "Passo 3: Come si dice «{p}»?",
+        "step": "Passo {n}/{t}: ",
+        "q1": "Come si dice «{v}» in ungherese?",
+        "q2": "Come si dice «lui/lei {f}»?",
+        "q3": "Come si dice «{p}»?",
+        "qg": "Come si dice: {who} + «{v}»?",
+        "pron": {"én": "io", "te": "tu", "ő": "lui / lei", "mi": "noi", "ők": "loro"},
+        "past": "passato",
+        "future": "futuro",
         "forms": _it_forms,
         "phrases": _it_phr,
         "morning": "☀️ Buongiorno! È ora di ripassare i verbi?",
@@ -213,11 +333,16 @@ LANGUAGES = {
         "choose_btn": "Proszę wybrać czasownik za pomocą przycisków:",
         "correct": "Dobrze! 🎉",
         "fire": "Świetnie! 🔥",
-        "finish": "🎉 Super! Wszystko zrobione! Wybierz nowy czasownik:",
+        "finish": "🎉 Super! Czasownik zaliczony! Wybierz nowy:",
         "retry": "Nie do końca. Spróbuj ponownie dla «{v}»:",
-        "q1": "Krok 1: Jak będzie «{v}» po węgiersku?",
-        "q2": "Krok 2: Jak będzie „on/ona {f}”?",
-        "q3": "Krok 3: Jak będzie „{p}”?",
+        "step": "Krok {n}/{t}: ",
+        "q1": "Jak będzie «{v}» po węgiersku?",
+        "q2": "Jak będzie „on/ona {f}”?",
+        "q3": "Jak będzie „{p}”?",
+        "qg": "Jak będzie: {who} + «{v}»?",
+        "pron": {"én": "ja", "te": "ty", "ő": "on / ona", "mi": "my", "ők": "oni"},
+        "past": "przeszłość",
+        "future": "przyszłość",
         "forms": _pl_forms,
         "phrases": _pl_phr,
         "morning": "☀️ Dzień dobry! Czas powtórzyć czasowniki?",
@@ -230,11 +355,16 @@ LANGUAGES = {
         "choose_btn": "Будь ласка, вибери дієслово за допомогою кнопок:",
         "correct": "Правильно! 🎉",
         "fire": "Чудово! 🔥",
-        "finish": "🎉 Молодчина! Всі 3 кроки пройдено! Вибери нове дієслово:",
+        "finish": "🎉 Молодчина! Дієслово пройдено повністю! Вибери нове:",
         "retry": "Не зовсім так. Спробуй ще раз для дієслова «{v}»:",
-        "q1": "Крок 1: Як буде «{v}» угорською?",
-        "q2": "Крок 2: Як буде «він / вона {f}»?",
-        "q3": "Крок 3: Як буде «{p}»?",
+        "step": "Крок {n}/{t}: ",
+        "q1": "Як буде «{v}» угорською?",
+        "q2": "Як буде «він / вона {f}»?",
+        "q3": "Як буде «{p}»?",
+        "qg": "Як буде: {who} + «{v}»?",
+        "pron": {"én": "я", "te": "ти", "ő": "він / вона", "mi": "ми", "ők": "вони"},
+        "past": "минуле",
+        "future": "майбутнє",
         "forms": _uk_forms,
         "phrases": _uk_phr,
         "morning": "☀️ Доброго ранку! Час повторити угорські дієслова?",
@@ -247,11 +377,16 @@ LANGUAGES = {
         "choose_btn": "请使用按钮选择动词：",
         "correct": "正确！🎉",
         "fire": "太棒了！🔥",
-        "finish": "🎉 太棒了！3个步骤已全部完成！请选择新动词：",
+        "finish": "🎉 太棒了！这个动词已全部完成！请选择新动词：",
         "retry": "不太对。请再试一次「{v}」：",
-        "q1": "第一步：「{v}」用匈牙利语怎么说？",
-        "q2": "第二步：“他/她{f}”用匈牙利语怎么说？",
-        "q3": "第三步：“{p}”用匈牙利语怎么说？",
+        "step": "第{n}/{t}步：",
+        "q1": "「{v}」用匈牙利语怎么说？",
+        "q2": "“他/她{f}”用匈牙利语怎么说？",
+        "q3": "“{p}”用匈牙利语怎么说？",
+        "qg": "用匈牙利语怎么说：{who} + 「{v}」？",
+        "pron": {"én": "我", "te": "你", "ő": "他 / 她", "mi": "我们", "ők": "他们"},
+        "past": "过去",
+        "future": "将来",
         "forms": _zh_forms,
         "phrases": _zh_phr,
         "morning": "☀️ 早上好！是时候练习匈牙利语动词了吗？",
@@ -264,11 +399,16 @@ LANGUAGES = {
         "choose_btn": "Por favor, escolha um verbo usando os botões:",
         "correct": "Correto! 🎉",
         "fire": "Excelente! 🔥",
-        "finish": "🎉 Parabéns! 3 etapas concluídas! Escolha um novo verbo:",
+        "finish": "🎉 Parabéns! Verbo concluído! Escolha um novo:",
         "retry": "Não exatamente. Tente novamente para «{v}»:",
-        "q1": "Passo 1: Como se diz «{v}» em húngaro?",
-        "q2": "Passo 2: Como se diz «ele/ela {f}»?",
-        "q3": "Passo 3: Como se diz «{p}»?",
+        "step": "Passo {n}/{t}: ",
+        "q1": "Como se diz «{v}» em húngaro?",
+        "q2": "Como se diz «ele/ela {f}»?",
+        "q3": "Como se diz «{p}»?",
+        "qg": "Como se diz: {who} + «{v}»?",
+        "pron": {"én": "eu", "te": "você", "ő": "ele / ela", "mi": "nós", "ők": "eles"},
+        "past": "passado",
+        "future": "futuro",
         "forms": _pt_forms,
         "phrases": _pt_phr,
         "morning": "☀️ Bom dia! Hora de praticar os verbos húngaros?",
@@ -286,12 +426,80 @@ def verb_name(lang, ru, en):
 
 
 def norm(text):
-    """Нормализация для сравнения: регистр, акценты, знаки препинания, пробелы."""
+    """Нормализация: регистр, акценты, знаки препинания, пробелы."""
     text = unicodedata.normalize("NFD", text.lower())
     text = "".join(c for c in text if unicodedata.category(c) != "Mn")
     for ch in "?!.,":
         text = text.replace(ch, "")
     return " ".join(text.split())
+
+
+# Местоимения (после norm: én→en, ő→o, ők→ok) — их можно писать перед ответом
+_PRON_NORM = {"en", "te", "o", "mi", "ti", "ok"}
+
+
+def strip_pronoun(text):
+    parts = text.split(" ", 1)
+    if len(parts) == 2 and parts[0] in _PRON_NORM and parts[1]:
+        return parts[1]
+    return text
+
+
+def build_steps(hu, l_data):
+    steps = ["inf", "ő"]
+    if hu in l_data["phrases"]:
+        steps.append("q")  # вопрос «Что ты ...?»
+    steps += ["én", "te", "mi", "ők", "past", "f_ő", "f_én", "f_te", "f_ők"]
+    return steps
+
+
+def answers_for(key, hu, inf):
+    """Список допустимых ответов; первый — тот, что показываем в подсказке."""
+    én, te, mi, ők, past = CONJ[hu]
+    if key == "inf":
+        return [inf]
+    if key == "ő":
+        return [hu]
+    if key == "q":
+        return [STEP3_ANSWERS[hu]]
+    if key == "én":
+        return [én]
+    if key == "te":
+        return [te]
+    if key == "mi":
+        return [mi]
+    if key == "ők":
+        return [ők]
+    if key == "past":
+        return [past]
+    if key.startswith("f_"):
+        fog = FOG[key[2:]]
+        return [f"{fog} {inf}", f"{inf} {fog}"]
+    return [hu]
+
+
+def make_question(l_data, lang, steps, step, verb):
+    hu, ru, en, inf = verb
+    key = steps[step - 1]
+    prefix = l_data["step"].format(n=step, t=len(steps))
+    v = verb_name(lang, ru, en)
+    pron = l_data["pron"]
+
+    if key == "inf":
+        body = l_data["q1"].format(v=v)
+    elif key == "q":
+        body = l_data["q3"].format(p=l_data["phrases"][hu])
+    elif key == "ő" and hu in l_data["forms"]:
+        body = l_data["q2"].format(f=l_data["forms"][hu])
+    else:
+        if key == "past":
+            who = f"{pron['ő']} ({l_data['past']})"
+        elif key.startswith("f_"):
+            who = f"{pron[key[2:]]} ({l_data['future']})"
+        else:
+            who = pron[key]
+        body = l_data["qg"].format(who=who, v=v)
+    return prefix + body
 
 
 def get_language_keyboard():
@@ -305,8 +513,12 @@ def get_language_keyboard():
     return markup
 
 
-def get_verbs_keyboard(lang="ru"):
-    selected = random.sample(VERBS_DATABASE, 3)
+def get_verbs_keyboard(lang="ru", exclude=()):
+    """3 случайных глагола, кроме недавно выученных."""
+    pool = [v for v in VERBS_DATABASE if v[0] not in exclude]
+    if len(pool) < 3:
+        pool = VERBS_DATABASE
+    selected = random.sample(pool, 3)
     markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     for hu, ru, en, inf in selected:
         markup.add(KeyboardButton(text=f"{hu} ({verb_name(lang, ru, en)})"))
@@ -346,12 +558,10 @@ def send_reply(chat_id, text_main, spoiler_word=""):
         bot.send_message(chat_id=chat_id, text=fallback)
 
 
-def correct_answer(step, hu, inf):
-    if step == 1:
-        return inf
-    if step == 2:
-        return hu
-    return STEP3_ANSWERS.get(hu, "mit csinálsz?")
+def new_state(user_id, lang):
+    recent = active_trainings.get(user_id, {}).get("recent", [])
+    active_trainings[user_id] = {"lang": lang, "step": 0, "recent": recent}
+    return active_trainings[user_id]
 
 
 # --------------------------------------------------------------- handlers
@@ -364,14 +574,14 @@ def cmd_start(message):
     current_lang = active_trainings.get(user_id, {}).get("lang")
 
     if current_lang in LANGUAGES:
-        active_trainings[user_id] = {"lang": current_lang, "step": 0}
+        data = new_state(user_id, current_lang)
         bot.send_message(
             message.chat.id,
             LANGUAGES[current_lang]["welcome"],
-            reply_markup=get_verbs_keyboard(current_lang),
+            reply_markup=get_verbs_keyboard(current_lang, data["recent"]),
         )
     else:
-        active_trainings[user_id] = {"lang": None, "step": 0}
+        new_state(user_id, None)
         bot.send_message(
             message.chat.id,
             "🌍 Выберите язык интерфейса / Choose your language:",
@@ -399,17 +609,18 @@ def handle_all_messages(message):
                 selected_lang = code
                 break
 
-        active_trainings[user_id] = {"lang": selected_lang, "step": 0}
+        data = new_state(user_id, selected_lang)
         bot.send_message(
             message.chat.id,
             LANGUAGES[selected_lang]["welcome"],
-            reply_markup=get_verbs_keyboard(selected_lang),
+            reply_markup=get_verbs_keyboard(selected_lang, data["recent"]),
         )
         return
 
     data = active_trainings[user_id]
     lang = data["lang"]
     l_data = LANGUAGES.get(lang, LANGUAGES["ru"])
+    recent = data.setdefault("recent", [])
 
     # --- выбор глагола
     if "verb" not in data:
@@ -418,44 +629,54 @@ def handle_all_messages(message):
             bot.send_message(
                 message.chat.id,
                 l_data["choose_btn"],
-                reply_markup=get_verbs_keyboard(lang),
+                reply_markup=get_verbs_keyboard(lang, recent),
             )
             return
 
         data["verb"] = found
+        data["steps"] = build_steps(found[0], l_data)
         data["step"] = 1
-        hu, ru, en, inf = found
-        q_text = l_data["q1"].format(v=verb_name(lang, ru, en))
-        send_reply(message.chat.id, q_text, inf)
+        question = make_question(l_data, lang, data["steps"], 1, found)
+        hint = answers_for(data["steps"][0], found[0], found[3])[0]
+        send_reply(message.chat.id, question, hint)
         return
 
     # --- проверка ответа
+    verb = data["verb"]
+    hu, ru, en, inf = verb
+    steps = data["steps"]
     step = data["step"]
-    hu, ru, en, inf = data["verb"]
-    expected = correct_answer(step, hu, inf)
+    key = steps[step - 1]
+    answers = answers_for(key, hu, inf)
 
-    if norm(text) == norm(expected):
+    user_text = norm(text)
+    if key != "q":
+        user_text = strip_pronoun(user_text)
+
+    if user_text in [norm(a) for a in answers]:
         step += 1
         data["step"] = step
 
-        if step == 2:
-            q2 = l_data["q2"].format(f=l_data["forms"][hu])
-            send_reply(message.chat.id, f"{l_data['correct']}\n\n{q2}", hu)
-        elif step == 3:
-            q3 = l_data["q3"].format(p=l_data["phrases"][hu])
-            full_answer = correct_answer(3, hu, inf)  # полная фраза, напр. «mit hallasz?»
-            send_reply(message.chat.id, f"{l_data['fire']}\n\n{q3}", full_answer)
-        else:
+        if step > len(steps):
+            # глагол пройден целиком
             data.pop("verb", None)
+            data.pop("steps", None)
             data["step"] = 0
+            recent.append(hu)
+            data["recent"] = recent[-RECENT_LIMIT:]
             bot.send_message(
                 message.chat.id,
                 l_data["finish"],
-                reply_markup=get_verbs_keyboard(lang),
+                reply_markup=get_verbs_keyboard(lang, data["recent"]),
             )
+        else:
+            praise = l_data["correct"] if step % 2 == 0 else l_data["fire"]
+            question = make_question(l_data, lang, steps, step, verb)
+            hint = answers_for(steps[step - 1], hu, inf)[0]
+            send_reply(message.chat.id, f"{praise}\n\n{question}", hint)
     else:
         retry_text = l_data["retry"].format(v=verb_name(lang, ru, en))
-        send_reply(message.chat.id, retry_text, expected)
+        send_reply(message.chat.id, retry_text, answers[0])
 
 
 # ---------------------------------------------------------- напоминания
@@ -474,12 +695,15 @@ def daily_reminders_loop():
                     l_data = LANGUAGES.get(user_lang, LANGUAGES["ru"])
                     # сбрасываем незаконченную тренировку, чтобы кнопки работали
                     state.pop("verb", None)
+                    state.pop("steps", None)
                     state["step"] = 0
+                    state.setdefault("lang", user_lang)
+                    state.setdefault("recent", [])
                     active_trainings[user_id] = state
                     bot.send_message(
                         user_id,
                         l_data[time_key],
-                        reply_markup=get_verbs_keyboard(user_lang),
+                        reply_markup=get_verbs_keyboard(user_lang, state["recent"]),
                     )
                 except Exception as e:
                     print(f"Ошибка отправки напоминания пользователю {user_id}: {e}")
