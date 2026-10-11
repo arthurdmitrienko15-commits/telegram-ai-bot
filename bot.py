@@ -1,5 +1,6 @@
 import os
 import random
+import re
 import threading
 import time
 import unicodedata
@@ -660,6 +661,40 @@ LANGUAGES = {
 
 # ---------------------------------------------------------------- helpers
 
+# --- Каомодзи вместо обычных эмодзи (случайный из набора каждый раз) ---
+KAO_HAPPY = [  # «Правильно!»
+    "ʕ•ᴥ•ʔ", "(≧◡≦)", "(๑>ᴗ<๑)", "(o˘◡˘o)", "(｡•ㅅ•｡)♡",
+    "( ´ ω ` )♡", "(づᴗ_ᴗ)づ♡", "(=^･ω･^=)", "ʕっ•ᴥ•ʔっ", "ฅ^•ﻌ•^ฅ",
+]
+KAO_GREAT = [  # «Отлично!»
+    "ʕ≧ᴥ≦ʔ", "(>ᴗ<)", "(=`ω´=)", "(≧◡≦)♡", "ʕっ•ᴥ•ʔっ", "(๑>ᴗ<๑)",
+]
+KAO_DONE = [  # глагол пройден полностью
+    "ʕっ•ᴥ•ʔっ♡", "(づᴗ_ᴗ)づ♡", "(๑>ᴗ<๑)♡", "ʕ≧ᴥ≦ʔ♡",
+]
+KAO_SAD = [  # неправильный ответ
+    "ʕ´•ᴥ•`ʔ", "(´･ω･`)", "(´• ω •`)",
+]
+KAO_TIME = {  # напоминания
+    "morning": ["(≧◡≦)♡", "ʕ•ᴥ•ʔ", "(o˘◡˘o)"],
+    "day": ["(=^･ω･^=)", "ฅ^•ﻌ•^ฅ", "(｡•ㅅ•｡)♡"],
+    "evening": ["(˘ω˘)zzZ", "ʕ-ᴥ-ʔ♡", "( ´ ω ` )♡"],
+}
+K_LANG = "(=^･ω･^=)"
+
+# Убираем обычные эмодзи из текстов (флаги в названиях языков не трогаем)
+_EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF☀-➿️‍]+")
+
+
+def _strip_emoji(s):
+    return _EMOJI_RE.sub("", s).strip()
+
+
+for _l in LANGUAGES.values():
+    for _k in ("correct", "fire", "finish", "morning", "day", "evening"):
+        _l[_k] = _strip_emoji(_l[_k])
+
+
 def verb_name(lang, ru, en):
     """Как называть глагол в вопросе: по-русски для ru/uk, иначе по-английски."""
     return ru if lang in ("ru", "uk") else en
@@ -801,6 +836,7 @@ def find_verb(text):
 
 
 def escape_markdown_v2(text):
+    text = text.replace("\\", "\\\\")  # сначала сам обратный слеш
     special_chars = "_*[]()~`>#+-=|{}.!"
     for char in special_chars:
         text = text.replace(char, f"\\{char}")
@@ -848,7 +884,7 @@ def cmd_start(message):
         new_state(user_id, None)
         bot.send_message(
             message.chat.id,
-            "🌍 Выберите язык интерфейса / Choose your language:",
+            f"{K_LANG} Выберите язык интерфейса / Choose your language:",
             reply_markup=get_language_keyboard(),
         )
 
@@ -930,16 +966,22 @@ def handle_all_messages(message):
             data["recent"] = recent[-RECENT_LIMIT:]
             bot.send_message(
                 message.chat.id,
-                l_data["finish"],
+                f"{random.choice(KAO_DONE)} {l_data['finish']}",
                 reply_markup=get_verbs_keyboard(lang, data["recent"]),
             )
         else:
-            praise = l_data["correct"] if step % 2 == 0 else l_data["fire"]
+            if step % 2 == 0:
+                praise = f"{l_data['correct']} {random.choice(KAO_HAPPY)}"
+            else:
+                praise = f"{l_data['fire']} {random.choice(KAO_GREAT)}"
             question = make_question(l_data, lang, steps, step, verb)
             hint = hint_for(steps[step - 1], hu, inf)
             send_reply(message.chat.id, f"{praise}\n\n{question}", hint)
     else:
-        retry_text = l_data["retry"].format(v=verb_name(lang, ru, en))
+        retry_text = (
+            f"{random.choice(KAO_SAD)} "
+            + l_data["retry"].format(v=verb_name(lang, ru, en))
+        )
         send_reply(message.chat.id, retry_text, hint_for(key, hu, inf))
 
 
@@ -966,7 +1008,7 @@ def daily_reminders_loop():
                     active_trainings[user_id] = state
                     bot.send_message(
                         user_id,
-                        l_data[time_key],
+                        f"{random.choice(KAO_TIME[time_key])} {l_data[time_key]}",
                         reply_markup=get_verbs_keyboard(user_lang, state["recent"]),
                     )
                 except Exception as e:
