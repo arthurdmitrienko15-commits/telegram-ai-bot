@@ -8,7 +8,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import telebot
-from telebot.types import KeyboardButton, ReplyKeyboardMarkup
+from telebot.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -53,6 +58,9 @@ VERBS_DATABASE = [
     ("fizet", "платить", "to pay", "fizetni"),
     ("segít", "помогать", "to help", "segíteni"),
     ("tesz", "класть / ставить", "to put", "tenni"),
+    ("gondolkodik", "думать", "to think", "gondolkodni"),
+    ("gépel", "печатать", "to type", "gépelni"),
+    ("rajzol", "рисовать", "to draw", "rajzolni"),
 ]
 
 # Спряжение: глагол -> (én, te, mi, ők, прошедшее «ő»)
@@ -88,6 +96,9 @@ CONJ = {
     "fizet": ("fizetek", "fizetsz", "fizetünk", "fizetnek", "fizetett"),
     "segít": ("segítek", "segítesz", "segítünk", "segítenek", "segített"),
     "tesz": ("teszek", "teszel", "teszünk", "tesznek", "tett"),
+    "gondolkodik": ("gondolkodom", "gondolkodsz", "gondolkodunk", "gondolkodnak", "gondolkodott"),
+    "gépel": ("gépelek", "gépelsz", "gépelünk", "gépelnek", "gépelt"),
+    "rajzol": ("rajzolok", "rajzolsz", "rajzolunk", "rajzolnak", "rajzolt"),
 }
 
 # Будущее время: fog + инфинитив
@@ -104,13 +115,14 @@ PAST_TE = {
     "fut": "futottál", "nyit": "nyitottál", "vár": "vártál",
     "keres": "kerestél", "játszik": "játszottál", "fizet": "fizettél",
     "segít": "segítettél", "tesz": "tettél",
+    "gondolkodik": "gondolkodtál", "gépel": "gépeltél", "rajzol": "rajzoltál",
 }
 
 # Шаги, которые подаются как вопрос (со знаком «?» в подсказке)
 QUESTION_KEYS = {"te", "past_te", "f_te"}
 
 # Допустимые разговорные варианты формы «te»
-ALT_TE = {"lakik": ["lakol"]}
+ALT_TE = {"lakik": ["lakol"], "gondolkodik": ["gondolkodol"]}
 
 # Определённое спряжение (én, te) — для вопроса «Какой ты ищешь?» -> melyiket keresed?
 DEF_CONJ = {
@@ -134,6 +146,7 @@ DEF_CONJ = {
     "keres": ("keresem", "keresed"),
     "fizet": ("fizetem", "fizeted"),
     "tesz": ("teszem", "teszed"),
+    "rajzol": ("rajzolom", "rajzolod"),
 }
 
 # Вопросительные слова, которые осмысленно сочетаются с глаголом:
@@ -169,6 +182,9 @@ WH = {
     "fizet": ["mit", "hol", "melyik"],
     "segít": ["hol"],
     "tesz": ["mit", "melyik"],
+    "gondolkodik": ["hol"],
+    "gépel": ["mit", "hol"],
+    "rajzol": ["mit", "hol", "melyik"],
 }
 
 # Венгерское слово в ответе («melyik» требует винительного: melyiket)
@@ -224,6 +240,9 @@ RU_PRES = {
     "fizet": ("плачу", "платишь", "платим", "платят"),
     "segít": ("помогаю", "помогаешь", "помогаем", "помогают"),
     "tesz": ("кладу", "кладёшь", "кладём", "кладут"),
+    "gondolkodik": ("думаю", "думаешь", "думаем", "думают"),
+    "gépel": ("печатаю", "печатаешь", "печатаем", "печатают"),
+    "rajzol": ("рисую", "рисуешь", "рисуем", "рисуют"),
 }
 
 # Русское прошедшее время (род не важен — пишем «(а)»)
@@ -238,6 +257,7 @@ RU_PAST = {
     "kap": "получал(а)", "fut": "бежал(а)", "nyit": "открывал(а)",
     "vár": "ждал(а)", "keres": "искал(а)", "játszik": "играл(а)",
     "fizet": "платил(а)", "segít": "помогал(а)", "tesz": "клал(а)",
+    "gondolkodik": "думал(а)", "gépel": "печатал(а)", "rajzol": "рисовал(а)",
 }
 
 # Английское прошедшее время (he/she ...)
@@ -250,6 +270,7 @@ EN_PAST = {
     "szeret": "loved", "ad": "gave", "kap": "got", "fut": "ran",
     "nyit": "opened", "vár": "waited", "keres": "looked for",
     "játszik": "played", "fizet": "paid", "segít": "helped", "tesz": "put",
+    "gondolkodik": "thought", "gépel": "typed", "rajzol": "drew",
 }
 
 _RU_PRON = {"én": "я", "te": "ты", "mi": "мы", "ők": "они"}
@@ -363,6 +384,7 @@ _ru_forms.update({
     "fut": "бежит", "nyit": "открывает", "vár": "ждёт", "keres": "ищет",
     "játszik": "играет", "fizet": "платит", "segít": "помогает",
     "tesz": "кладёт / ставит",
+    "gondolkodik": "думает", "gépel": "печатает", "rajzol": "рисует",
 })
 _uk_forms, _uk_phr = L(
     ["робить", "читає", "пише", "їсть", "п'є", "бачить", "чує", "купує"],
@@ -377,6 +399,7 @@ _uk_forms.update({
     "fut": "біжить", "nyit": "відкриває", "vár": "чекає", "keres": "шукає",
     "játszik": "грає", "fizet": "платить", "segít": "допомагає",
     "tesz": "кладе / ставить",
+    "gondolkodik": "думає", "gépel": "друкує", "rajzol": "малює",
 })
 _en_forms, _en_phr = L(
     ["does", "reads", "writes", "eats", "drinks", "sees", "hears", "buys"],
@@ -391,6 +414,7 @@ _en_forms.update({
     "ad": "gives", "kap": "gets", "fut": "runs", "nyit": "opens",
     "vár": "waits", "keres": "looks for", "játszik": "plays", "fizet": "pays",
     "segít": "helps", "tesz": "puts",
+    "gondolkodik": "thinks", "gépel": "types", "rajzol": "draws",
 })
 _es_forms, _es_phr = L(
     ["hace", "lee", "escribe", "come", "bebe", "ve", "oye", "compra"],
@@ -681,6 +705,7 @@ KAO_TIME = {  # напоминания
     "evening": ["(˘ω˘)zzZ", "ʕ-ᴥ-ʔ♡", "( ´ ω ` )♡"],
 }
 K_LANG = "(=^･ω･^=)"
+CARDS_BTN = "Cards (=^･ω･^=)"  # кнопка запуска игры с картинками
 
 # Убираем обычные эмодзи из текстов (флаги в названиях языков не трогаем)
 _EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF☀-➿️‍]+")
@@ -821,6 +846,8 @@ def get_verbs_keyboard(lang="ru", exclude=()):
     markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     for hu, ru, en, inf in selected:
         markup.add(KeyboardButton(text=f"{hu} ({verb_name(lang, ru, en)})"))
+    if available_cards():
+        markup.add(KeyboardButton(text=CARDS_BTN))
     return markup
 
 
@@ -865,6 +892,171 @@ def new_state(user_id, lang):
 
 
 # --------------------------------------------------------------- handlers
+
+# ------------------------------------------------------------ карточки
+
+# Папка с картинками лежит рядом с bot.py: bot.py + cards/ad.jpg, cards/fut.jpg ...
+CARDS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cards")
+
+# Глагол -> файл с картинкой Réka
+CARD_FILES = {
+    "ad": "ad.jpg",
+    "gondolkodik": "gondolkodik.jpg",
+    "fut": "fut.jpg",
+    "ír": "ir.jpg",
+    "gépel": "gepel.jpg",
+    "rajzol": "rajzol.jpg",
+    "tanul": "tanul.jpg",
+}
+
+# Глаголы, которые нельзя предлагать как неправильные варианты:
+# они тоже подходят к картинке, и ответ был бы спорным.
+CARD_CONFLICTS = {
+    "ad": {"kér", "tesz", "vesz", "kap", "eszik"},
+    "gondolkodik": {"tanul", "tud", "akar"},
+    "fut": {"megy", "jön"},
+    "ír": {"gépel", "rajzol", "tanul", "dolgozik", "olvas"},
+    "gépel": {"ír", "dolgozik", "játszik"},
+    "rajzol": {"ír", "játszik", "dolgozik"},
+    "tanul": {"olvas", "ír", "gondolkodik", "dolgozik"},
+}
+
+# Telegram запоминает загруженную картинку: после первой отправки
+# дальше шлём её по file_id, без повторной загрузки.
+CARD_FILE_IDS = {}
+
+VERB_INDEX = {v[0]: i for i, v in enumerate(VERBS_DATABASE)}
+
+NO_CARDS_MSG = (
+    "Нет картинок. Положи папку cards рядом с bot.py / "
+    "No card images: put the cards folder next to bot.py"
+)
+
+CARDS_TXT = {
+    "ru": {"q": "Что делает Réka?", "no": "Не то, попробуй ещё", "next": "Дальше", "score": "Счёт"},
+    "en": {"q": "What is Réka doing?", "no": "Not that one, try again", "next": "Next", "score": "Score"},
+    "es": {"q": "¿Qué hace Réka?", "no": "Esa no, prueba otra", "next": "Siguiente", "score": "Puntos"},
+    "fr": {"q": "Que fait Réka ?", "no": "Pas celle-là, réessaie", "next": "Suivant", "score": "Score"},
+    "de": {"q": "Was macht Réka?", "no": "Nicht das, versuch's nochmal", "next": "Weiter", "score": "Punkte"},
+    "it": {"q": "Cosa fa Réka?", "no": "Non quella, riprova", "next": "Avanti", "score": "Punti"},
+    "pl": {"q": "Co robi Réka?", "no": "Nie to, spróbuj jeszcze raz", "next": "Dalej", "score": "Wynik"},
+    "uk": {"q": "Що робить Réka?", "no": "Не те, спробуй ще", "next": "Далі", "score": "Рахунок"},
+    "zh": {"q": "Réka在做什么？", "no": "不是这个，再试试", "next": "下一张", "score": "得分"},
+    "pt": {"q": "O que a Réka está fazendo?", "no": "Não é essa, tente de novo", "next": "Próxima", "score": "Pontos"},
+}
+
+
+def available_cards():
+    """Глаголы, для которых картинка реально лежит в папке cards."""
+    return [
+        hu for hu, fn in CARD_FILES.items()
+        if os.path.exists(os.path.join(CARDS_DIR, fn))
+    ]
+
+
+def send_card(chat_id, user_id):
+    """Присылает картинку Réka и 4 кнопки с венгерскими глаголами."""
+    state = active_trainings.setdefault(
+        user_id, {"lang": None, "step": 0, "recent": []}
+    )
+    lang = state.get("lang") or "ru"
+    t = CARDS_TXT.get(lang, CARDS_TXT["ru"])
+
+    cards = available_cards()
+    if not cards:
+        bot.send_message(chat_id, NO_CARDS_MSG)
+        return
+
+    pool = [c for c in cards if c != state.get("last_card")] or cards
+    correct = random.choice(pool)
+    wrong_pool = [
+        v[0] for v in VERBS_DATABASE
+        if v[0] != correct and v[0] not in CARD_CONFLICTS.get(correct, ())
+    ]
+    options = random.sample(wrong_pool, 3) + [correct]
+    random.shuffle(options)
+
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(*[
+        InlineKeyboardButton(
+            text=o, callback_data=f"cd:{VERB_INDEX[o]}:{VERB_INDEX[correct]}"
+        )
+        for o in options
+    ])
+
+    state["last_card"] = correct
+    state["card_missed"] = False
+    caption = f"{t['q']} {random.choice(KAO_HAPPY)}"
+
+    file_id = CARD_FILE_IDS.get(correct)
+    if file_id:
+        bot.send_photo(chat_id, file_id, caption=caption, reply_markup=markup)
+    else:
+        path = os.path.join(CARDS_DIR, CARD_FILES[correct])
+        with open(path, "rb") as f:
+            msg = bot.send_photo(chat_id, f, caption=caption, reply_markup=markup)
+        CARD_FILE_IDS[correct] = msg.photo[-1].file_id
+
+
+@bot.message_handler(commands=["cards"])
+def cmd_cards(message):
+    all_users.add(message.from_user.id)
+    send_card(message.chat.id, message.from_user.id)
+
+
+@bot.callback_query_handler(
+    func=lambda call: call.data == "cn" or call.data.startswith("cd:")
+)
+def on_card_callback(call):
+    user_id = call.from_user.id
+    chat_id = call.message.chat.id
+    msg_id = call.message.message_id
+    state = active_trainings.setdefault(
+        user_id, {"lang": None, "step": 0, "recent": []}
+    )
+    lang = state.get("lang") or "ru"
+    t = CARDS_TXT.get(lang, CARDS_TXT["ru"])
+
+    # кнопка «Дальше»
+    if call.data == "cn":
+        bot.answer_callback_query(call.id)
+        try:  # убираем кнопку, чтобы двойное нажатие не слало две картинки
+            bot.edit_message_reply_markup(chat_id, msg_id, reply_markup=None)
+        except Exception:
+            pass
+        send_card(chat_id, user_id)
+        return
+
+    _, chosen, correct = call.data.split(":")
+
+    if chosen == correct:
+        hu, ru, en, inf = VERBS_DATABASE[int(correct)]
+        state["card_total"] = state.get("card_total", 0) + 1
+        if not state.get("card_missed"):
+            state["card_ok"] = state.get("card_ok", 0) + 1
+        caption = (
+            f"{hu} ({inf}) — {verb_name(lang, ru, en)}\n"
+            f"{t['score']}: {state.get('card_ok', 0)}/{state['card_total']} "
+            f"{random.choice(KAO_HAPPY)}"
+        )
+        next_markup = InlineKeyboardMarkup()
+        next_markup.add(InlineKeyboardButton(text=t["next"], callback_data="cn"))
+        bot.answer_callback_query(call.id, text=random.choice(KAO_GREAT))
+        bot.edit_message_caption(
+            caption=caption, chat_id=chat_id, message_id=msg_id,
+            reply_markup=next_markup,
+        )
+    else:
+        state["card_missed"] = True
+        bot.answer_callback_query(
+            call.id, text=f"{random.choice(KAO_SAD)} {t['no']}"
+        )
+        old = call.message.reply_markup.keyboard if call.message.reply_markup else []
+        left = [b for row in old for b in row if b.callback_data != call.data]
+        new_markup = InlineKeyboardMarkup(row_width=2)
+        new_markup.add(*left)
+        bot.edit_message_reply_markup(chat_id, msg_id, reply_markup=new_markup)
+
 
 @bot.message_handler(commands=["start", "reset", "verbs"])
 def cmd_start(message):
@@ -921,6 +1113,11 @@ def handle_all_messages(message):
     lang = data["lang"]
     l_data = LANGUAGES.get(lang, LANGUAGES["ru"])
     recent = data.setdefault("recent", [])
+
+    # --- игра с картинками
+    if text == CARDS_BTN:
+        send_card(message.chat.id, user_id)
+        return
 
     # --- выбор глагола
     if "verb" not in data:
