@@ -904,7 +904,7 @@ CARD_FILES = {
     "gondolkodik": "gondolkodik.jpg",
     "fut": "fut.jpg",
     "ír": "ir.jpg",
-    "gépel": "gepel.jpg",
+    "dolgozik": "dolgozik.jpg",
     "rajzol": "rajzol.jpg",
     "tanul": "tanul.jpg",
 }
@@ -916,7 +916,7 @@ CARD_CONFLICTS = {
     "gondolkodik": {"tanul", "tud", "akar"},
     "fut": {"megy", "jön"},
     "ír": {"gépel", "rajzol", "tanul", "dolgozik", "olvas"},
-    "dolgozik": {"ír", "dolgozik", "játszik"},
+    "dolgozik": {"gépel", "ír", "tanul", "olvas"},
     "rajzol": {"ír", "játszik", "dolgozik"},
     "tanul": {"olvas", "ír", "gondolkodik", "dolgozik"},
 }
@@ -1005,7 +1005,7 @@ def cmd_cards(message):
 
 
 @bot.callback_query_handler(
-    func=lambda call: call.data == "cn" or call.data.startswith("cd:")
+    func=lambda call: call.data in ("cn", "cx") or call.data.startswith("cd:")
 )
 def on_card_callback(call):
     user_id = call.from_user.id
@@ -1017,7 +1017,12 @@ def on_card_callback(call):
     lang = state.get("lang") or "ru"
     t = CARDS_TXT.get(lang, CARDS_TXT["ru"])
 
-    # кнопка «Дальше»
+    # нажатие на уже подсвеченную зелёную кнопку — ничего не делаем
+    if call.data == "cx":
+        bot.answer_callback_query(call.id)
+        return
+
+    # кнопка «Дальше» (на случай старых сообщений)
     if call.data == "cn":
         bot.answer_callback_query(call.id)
         try:  # убираем кнопку, чтобы двойное нажатие не слало две картинки
@@ -1039,13 +1044,24 @@ def on_card_callback(call):
             f"{t['score']}: {state.get('card_ok', 0)}/{state['card_total']} "
             f"{random.choice(KAO_HAPPY)}"
         )
-        next_markup = InlineKeyboardMarkup()
-        next_markup.add(InlineKeyboardButton(text=t["next"], callback_data="cn"))
-        bot.answer_callback_query(call.id, text=random.choice(KAO_GREAT))
-        bot.edit_message_caption(
-            caption=caption, chat_id=chat_id, message_id=msg_id,
-            reply_markup=next_markup,
+        # правильная кнопка становится зелёной (✅), остальные убираем
+        old_kb = call.message.reply_markup.keyboard if call.message.reply_markup else []
+        chosen_text = next(
+            (b.text for row in old_kb for b in row if b.callback_data == call.data),
+            hu,
         )
+        green = InlineKeyboardMarkup()
+        green.add(InlineKeyboardButton(text=f"✅ {chosen_text}", callback_data="cx"))
+        bot.answer_callback_query(call.id, text=random.choice(KAO_GREAT))
+        try:
+            bot.edit_message_caption(
+                caption=caption, chat_id=chat_id, message_id=msg_id,
+                reply_markup=green,
+            )
+        except Exception:
+            pass
+        time.sleep(1.2)  # даём увидеть зелёный ответ
+        send_card(chat_id, user_id)
     else:
         state["card_missed"] = True
         bot.answer_callback_query(
