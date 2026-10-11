@@ -92,6 +92,149 @@ CONJ = {
 # Будущее время: fog + инфинитив
 FOG = {"ő": "fog", "én": "fogok", "te": "fogsz", "ők": "fognak"}
 
+# Прошедшее время для «ты» (te): вопрос «Ты работал?» -> dolgoztál?
+PAST_TE = {
+    "csinál": "csináltál", "olvas": "olvastál", "ír": "írtál", "eszik": "ettél",
+    "iszik": "ittál", "lát": "láttál", "hall": "hallottál", "vesz": "vettél",
+    "kér": "kértél", "tanul": "tanultál", "dolgozik": "dolgoztál",
+    "lakik": "laktál", "beszél": "beszéltél", "tud": "tudtál",
+    "akar": "akartál", "megy": "mentél", "jön": "jöttél", "alszik": "aludtál",
+    "főz": "főztél", "szeret": "szerettél", "ad": "adtál", "kap": "kaptál",
+    "fut": "futottál", "nyit": "nyitottál", "vár": "vártál",
+    "keres": "kerestél", "játszik": "játszottál", "fizet": "fizettél",
+    "segít": "segítettél", "tesz": "tettél",
+}
+
+# Шаги, которые подаются как вопрос (со знаком «?» в подсказке)
+QUESTION_KEYS = {"te", "past_te", "f_te"}
+
+# Русские формы для естественных фраз: я, ты, мы, они (настоящее время)
+RU_PRES = {
+    "csinál": ("делаю", "делаешь", "делаем", "делают"),
+    "olvas": ("читаю", "читаешь", "читаем", "читают"),
+    "ír": ("пишу", "пишешь", "пишем", "пишут"),
+    "eszik": ("ем", "ешь", "едим", "едят"),
+    "iszik": ("пью", "пьёшь", "пьём", "пьют"),
+    "lát": ("вижу", "видишь", "видим", "видят"),
+    "hall": ("слышу", "слышишь", "слышим", "слышат"),
+    "vesz": ("покупаю", "покупаешь", "покупаем", "покупают"),
+    "kér": ("прошу", "просишь", "просим", "просят"),
+    "tanul": ("учу", "учишь", "учим", "учат"),
+    "dolgozik": ("работаю", "работаешь", "работаем", "работают"),
+    "lakik": ("живу", "живёшь", "живём", "живут"),
+    "beszél": ("говорю", "говоришь", "говорим", "говорят"),
+    "tud": ("знаю", "знаешь", "знаем", "знают"),
+    "akar": ("хочу", "хочешь", "хотим", "хотят"),
+    "megy": ("иду", "идёшь", "идём", "идут"),
+    "jön": ("прихожу", "приходишь", "приходим", "приходят"),
+    "alszik": ("сплю", "спишь", "спим", "спят"),
+    "főz": ("готовлю", "готовишь", "готовим", "готовят"),
+    "szeret": ("люблю", "любишь", "любим", "любят"),
+    "ad": ("даю", "даёшь", "даём", "дают"),
+    "kap": ("получаю", "получаешь", "получаем", "получают"),
+    "fut": ("бегу", "бежишь", "бежим", "бегут"),
+    "nyit": ("открываю", "открываешь", "открываем", "открывают"),
+    "vár": ("жду", "ждёшь", "ждём", "ждут"),
+    "keres": ("ищу", "ищешь", "ищем", "ищут"),
+    "játszik": ("играю", "играешь", "играем", "играют"),
+    "fizet": ("плачу", "платишь", "платим", "платят"),
+    "segít": ("помогаю", "помогаешь", "помогаем", "помогают"),
+    "tesz": ("кладу", "кладёшь", "кладём", "кладут"),
+}
+
+# Русское прошедшее время (род не важен — пишем «(а)»)
+RU_PAST = {
+    "csinál": "делал(а)", "olvas": "читал(а)", "ír": "писал(а)",
+    "eszik": "ел(а)", "iszik": "пил(а)", "lát": "видел(а)",
+    "hall": "слышал(а)", "vesz": "покупал(а)", "kér": "просил(а)",
+    "tanul": "учил(а)", "dolgozik": "работал(а)", "lakik": "жил(а)",
+    "beszél": "говорил(а)", "tud": "знал(а)", "akar": "хотел(а)",
+    "megy": "шёл(шла)", "jön": "приходил(а)", "alszik": "спал(а)",
+    "főz": "готовил(а)", "szeret": "любил(а)", "ad": "давал(а)",
+    "kap": "получал(а)", "fut": "бежал(а)", "nyit": "открывал(а)",
+    "vár": "ждал(а)", "keres": "искал(а)", "játszik": "играл(а)",
+    "fizet": "платил(а)", "segít": "помогал(а)", "tesz": "клал(а)",
+}
+
+# Английское прошедшее время (he/she ...)
+EN_PAST = {
+    "csinál": "did", "olvas": "read", "ír": "wrote", "eszik": "ate",
+    "iszik": "drank", "lát": "saw", "hall": "heard", "vesz": "bought",
+    "kér": "asked for", "tanul": "learned", "dolgozik": "worked",
+    "lakik": "lived", "beszél": "spoke", "tud": "knew", "akar": "wanted",
+    "megy": "went", "jön": "came", "alszik": "slept", "főz": "cooked",
+    "szeret": "loved", "ad": "gave", "kap": "got", "fut": "ran",
+    "nyit": "opened", "vár": "waited", "keres": "looked for",
+    "játszik": "played", "fizet": "paid", "segít": "helped", "tesz": "put",
+}
+
+_RU_PRON = {"én": "я", "te": "ты", "mi": "мы", "ők": "они"}
+_RU_BUDU = {
+    "én": "я буду", "te": "ты будешь", "ő": "он / она будет",
+    "mi": "мы будем", "ők": "они будут",
+}
+_PRES_IDX = {"én": 0, "te": 1, "mi": 2, "ők": 3}
+_EN_PRON = {"én": "I", "te": "you", "mi": "we", "ők": "they"}
+
+
+def _cap(s):
+    return s[:1].upper() + s[1:]
+
+
+def ru_natural(key, hu, ru, en, l_data):
+    """Естественная русская фраза: «Я буду работать», «Ты работал(а)?» ..."""
+    if key == "ő":
+        s = f"он / она {l_data['forms'][hu]}"
+    elif key in _PRES_IDX:
+        s = f"{_RU_PRON[key]} {RU_PRES[hu][_PRES_IDX[key]]}"
+    elif key == "past":
+        s = f"он / она {RU_PAST[hu]}"
+    elif key == "past_te":
+        s = f"ты {RU_PAST[hu]}"
+    else:  # f_ő, f_én, f_te, f_ők
+        s = f"{_RU_BUDU[key[2:]]} {ru}"
+    if key in QUESTION_KEYS:
+        s += "?"
+    return _cap(s)
+
+
+def en_natural(key, hu, ru, en, l_data):
+    """Естественная английская фраза: «I will work», «Did you work?» ..."""
+    bare = en[3:] if en.startswith("to ") else en
+    if key == "ő":
+        s = f"he / she {l_data['forms'][hu]}"
+    elif key == "te":
+        s = f"do you {bare}"
+    elif key in _EN_PRON:
+        s = f"{_EN_PRON[key]} {bare}"
+    elif key == "past":
+        s = f"he / she {EN_PAST[hu]}"
+    elif key == "past_te":
+        s = f"did you {bare}"
+    else:  # f_ő, f_én, f_te, f_ők
+        who = key[2:]
+        if who == "te":
+            s = f"will you {bare}"
+        elif who == "ő":
+            s = f"he / she will {bare}"
+        else:
+            s = f"{_EN_PRON[who]} will {bare}"
+    if key in QUESTION_KEYS:
+        s += "?"
+    return _cap(s)
+
+
+# Языки, где вопросы пишутся естественной фразой
+NATURAL = {"ru": ru_natural, "en": en_natural}
+
+
+def hint_for(key, hu, inf):
+    """Подсказка под спойлером; у вопросов («ты ...?») добавляем «?»."""
+    a = answers_for(key, hu, inf)[0]
+    if key in QUESTION_KEYS and not a.endswith("?"):
+        a += "?"
+    return a
+
 # Вопрос «Что ты ...?» — только для глаголов, у которых есть объект
 STEP3_ANSWERS = {
     "csinál": "mit csinálsz?",
@@ -208,6 +351,7 @@ LANGUAGES = {
         "q2": "Как будет «он / она {f}»?",
         "q3": "Как будет «{p}»?",
         "qg": "Как будет: {who} + «{v}»?",
+        "qn": "Как будет «{s}»?",
         "pron": {"én": "я", "te": "ты", "ő": "он / она", "mi": "мы", "ők": "они"},
         "past": "прошедшее",
         "future": "будущее",
@@ -230,6 +374,7 @@ LANGUAGES = {
         "q2": "How do you say 'he/she {f}'?",
         "q3": "How do you say «{p}»?",
         "qg": "How do you say: {who} + «{v}»?",
+        "qn": "How do you say «{s}»?",
         "pron": {"én": "I", "te": "you", "ő": "he / she", "mi": "we", "ők": "they"},
         "past": "past",
         "future": "future",
@@ -449,7 +594,11 @@ def build_steps(hu, l_data):
     steps = ["inf", "ő"]
     if hu in l_data["phrases"]:
         steps.append("q")  # вопрос «Что ты ...?»
-    steps += ["én", "te", "mi", "ők", "past", "f_ő", "f_én", "f_te", "f_ők"]
+    steps += [
+        "én", "te", "mi", "ők",
+        "past", "past_te",
+        "f_ő", "f_én", "f_te", "f_ők",
+    ]
     return steps
 
 
@@ -472,6 +621,8 @@ def answers_for(key, hu, inf):
         return [ők]
     if key == "past":
         return [past]
+    if key == "past_te":
+        return [PAST_TE[hu]]
     if key.startswith("f_"):
         fog = FOG[key[2:]]
         return [f"{fog} {inf}", f"{inf} {fog}"]
@@ -489,16 +640,23 @@ def make_question(l_data, lang, steps, step, verb):
         body = l_data["q1"].format(v=v)
     elif key == "q":
         body = l_data["q3"].format(p=l_data["phrases"][hu])
+    elif lang in NATURAL:
+        body = l_data["qn"].format(s=NATURAL[lang](key, hu, ru, en, l_data))
     elif key == "ő" and hu in l_data["forms"]:
         body = l_data["q2"].format(f=l_data["forms"][hu])
     else:
         if key == "past":
             who = f"{pron['ő']} ({l_data['past']})"
+        elif key == "past_te":
+            who = f"{pron['te']} ({l_data['past']})"
         elif key.startswith("f_"):
             who = f"{pron[key[2:]]} ({l_data['future']})"
         else:
             who = pron[key]
         body = l_data["qg"].format(who=who, v=v)
+    # если фраза в кавычках уже заканчивается на «?», не дублируем знак после неё
+    for dup, fixed in (("?»?", "?»"), ("?“?", "?“"), ("?”?", "?”"), ("? » ?", "? »")):
+        body = body.replace(dup, fixed)
     return prefix + body
 
 
@@ -637,7 +795,7 @@ def handle_all_messages(message):
         data["steps"] = build_steps(found[0], l_data)
         data["step"] = 1
         question = make_question(l_data, lang, data["steps"], 1, found)
-        hint = answers_for(data["steps"][0], found[0], found[3])[0]
+        hint = hint_for(data["steps"][0], found[0], found[3])
         send_reply(message.chat.id, question, hint)
         return
 
@@ -672,11 +830,11 @@ def handle_all_messages(message):
         else:
             praise = l_data["correct"] if step % 2 == 0 else l_data["fire"]
             question = make_question(l_data, lang, steps, step, verb)
-            hint = answers_for(steps[step - 1], hu, inf)[0]
+            hint = hint_for(steps[step - 1], hu, inf)
             send_reply(message.chat.id, f"{praise}\n\n{question}", hint)
     else:
         retry_text = l_data["retry"].format(v=verb_name(lang, ru, en))
-        send_reply(message.chat.id, retry_text, answers[0])
+        send_reply(message.chat.id, retry_text, hint_for(key, hu, inf))
 
 
 # ---------------------------------------------------------- напоминания
