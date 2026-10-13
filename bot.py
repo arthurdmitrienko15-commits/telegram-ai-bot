@@ -1150,16 +1150,54 @@ CARDS_TXT = {
 }
 
 
+# Цветные карточки: ключ -> (файл, русский, украинский, английский)
+COLOR_CARDS = {
+    "fekete": ("c_fekete.jpg", "чёрный", "чорний", "black"),
+    "világoskék": ("c_vilagoskek.jpg", "голубой", "блакитний", "light blue"),
+    "fehér": ("c_feher.jpg", "белый", "білий", "white"),
+    "narancssárga": ("c_narancssarga.jpg", "оранжевый", "помаранчевий", "orange"),
+    "rózsaszín": ("c_rozsaszin.jpg", "розовый", "рожевий", "pink"),
+    "piros": ("c_piros.jpg", "красный", "червоний", "red"),
+    "zöld": ("c_zold.jpg", "зелёный", "зелений", "green"),
+    "sárga": ("c_sarga.jpg", "жёлтый", "жовтий", "yellow"),
+}
+COLOR_INDEX = {k: i for i, k in enumerate(COLOR_CARDS)}
+COLOR_KEYS = list(COLOR_CARDS)
+COLOR_Q = {
+    "ru": "Какого цвета?", "en": "What color is it?", "uk": "Якого кольору?",
+    "es": "¿De qué color es?", "fr": "De quelle couleur ?", "de": "Welche Farbe?",
+    "it": "Di che colore è?", "pl": "Jaki to kolor?", "zh": "这是什么颜色？",
+    "pt": "Qual é a cor?",
+}
+
+
+def color_name(lang, key):
+    _, ru, uk, en = COLOR_CARDS[key]
+    return ru if lang == "ru" else (uk if lang == "uk" else en)
+
+
 def available_cards():
-    """Глаголы, для которых картинка реально лежит в папке cards."""
-    return [
-        hu for hu, fn in CARD_FILES.items()
+    """Ключи карточек, для которых картинка реально лежит в папке cards.
+    'v:глагол' — глагол, 'c:цвет' — цвет."""
+    out = [
+        f"v:{hu}" for hu, fn in CARD_FILES.items()
         if os.path.exists(os.path.join(CARDS_DIR, fn))
     ]
+    out += [
+        f"c:{k}" for k, v in COLOR_CARDS.items()
+        if os.path.exists(os.path.join(CARDS_DIR, v[0]))
+    ]
+    return out
+
+
+def card_path(key):
+    kind, name = key.split(":", 1)
+    fn = CARD_FILES[name] if kind == "v" else COLOR_CARDS[name][0]
+    return os.path.join(CARDS_DIR, fn)
 
 
 def send_card(chat_id, user_id):
-    """Присылает картинку Réka и 4 кнопки с венгерскими глаголами."""
+    """Присылает картинку Réka и 4 кнопки (глагол или цвет)."""
     state = active_trainings.setdefault(
         user_id, {"lang": None, "step": 0, "recent": []}
     )
@@ -1175,36 +1213,53 @@ def send_card(chat_id, user_id):
     hist = state.setdefault("card_hist", [])
     blocked = hist[-min(3, len(cards) - 1):] if len(cards) > 1 else []
     pool = [c for c in cards if c not in blocked] or cards
-    correct = random.choice(pool)
-    hist.append(correct)
+    key = random.choice(pool)
+    hist.append(key)
     del hist[:-6]
-    wrong_pool = [
-        v[0] for v in VERBS_DATABASE
-        if v[0] != correct and v[0] not in CARD_CONFLICTS.get(correct, ())
-    ]
-    options = random.sample(wrong_pool, 3) + [correct]
-    random.shuffle(options)
+
+    kind, name = key.split(":", 1)
+    if kind == "v":
+        correct = name
+        wrong_pool = [
+            v[0] for v in VERBS_DATABASE
+            if v[0] != correct and v[0] not in CARD_CONFLICTS.get(correct, ())
+        ]
+        options = random.sample(wrong_pool, 3) + [correct]
+        random.shuffle(options)
+        buttons = [
+            InlineKeyboardButton(
+                text=o, callback_data=f"cd:{VERB_INDEX[o]}:{VERB_INDEX[correct]}"
+            )
+            for o in options
+        ]
+        question = t["q"]
+    else:
+        correct = name
+        others = [k for k in COLOR_KEYS if k != correct]
+        options = random.sample(others, 3) + [correct]
+        random.shuffle(options)
+        buttons = [
+            InlineKeyboardButton(
+                text=o, callback_data=f"cl:{COLOR_INDEX[o]}:{COLOR_INDEX[correct]}"
+            )
+            for o in options
+        ]
+        question = COLOR_Q.get(lang, COLOR_Q["en"])
 
     markup = InlineKeyboardMarkup(row_width=2)
-    markup.add(*[
-        InlineKeyboardButton(
-            text=o, callback_data=f"cd:{VERB_INDEX[o]}:{VERB_INDEX[correct]}"
-        )
-        for o in options
-    ])
+    markup.add(*buttons)
 
-    state["last_card"] = correct
+    state["last_card"] = key
     state["card_missed"] = False
-    caption = f"{t['q']} {random.choice(KAO_HAPPY)}"
+    caption = f"{question} {random.choice(KAO_HAPPY)}"
 
-    file_id = CARD_FILE_IDS.get(correct)
+    file_id = CARD_FILE_IDS.get(key)
     if file_id:
         bot.send_photo(chat_id, file_id, caption=caption, reply_markup=markup)
     else:
-        path = os.path.join(CARDS_DIR, CARD_FILES[correct])
-        with open(path, "rb") as f:
+        with open(card_path(key), "rb") as f:
             msg = bot.send_photo(chat_id, f, caption=caption, reply_markup=markup)
-        CARD_FILE_IDS[correct] = msg.photo[-1].file_id
+        CARD_FILE_IDS[key] = msg.photo[-1].file_id
 
 
 def start_cards(chat_id, user_id):
@@ -1222,7 +1277,7 @@ def cmd_cards(message):
 
 
 @bot.callback_query_handler(
-    func=lambda call: call.data in ("cn", "cx") or call.data.startswith("cd:")
+    func=lambda call: call.data in ("cn", "cx") or call.data.startswith(("cd:", "cl:"))
 )
 def on_card_callback(call):
     user_id = call.from_user.id
@@ -1242,22 +1297,28 @@ def on_card_callback(call):
     # кнопка «Дальше» (на случай старых сообщений)
     if call.data == "cn":
         bot.answer_callback_query(call.id)
-        try:  # убираем кнопку, чтобы двойное нажатие не слало две картинки
+        try:
             bot.edit_message_reply_markup(chat_id, msg_id, reply_markup=None)
         except Exception:
             pass
         send_card(chat_id, user_id)
         return
 
-    _, chosen, correct = call.data.split(":")
+    kind, chosen, correct = call.data.split(":")
 
     if chosen == correct:
-        hu, ru, en, inf = VERBS_DATABASE[int(correct)]
+        if kind == "cd":
+            hu, ru, en, inf = VERBS_DATABASE[int(correct)]
+            title = f"{hu} ({inf}) — {verb_name(lang, ru, en)}"
+        else:
+            ckey = COLOR_KEYS[int(correct)]
+            title = f"{ckey} — {color_name(lang, ckey)}"
+            hu = ckey
         state["card_total"] = state.get("card_total", 0) + 1
         if not state.get("card_missed"):
             state["card_ok"] = state.get("card_ok", 0) + 1
         caption = (
-            f"{hu} ({inf}) — {verb_name(lang, ru, en)}\n"
+            f"{title}\n"
             f"{t['score']}: {state.get('card_ok', 0)}/{state['card_total']} "
             f"{random.choice(KAO_HAPPY)}"
         )
