@@ -879,19 +879,19 @@ def escape_markdown_v2(text):
     return text
 
 
-def send_reply(chat_id, text_main, spoiler_word=""):
+def send_reply(chat_id, text_main, spoiler_word="", reply_markup=None):
     """Отправляет текст; подсказка (полный ответ) идёт под спойлером."""
     msg = escape_markdown_v2(text_main)
     if spoiler_word:
         msg += f"\n\n||{escape_markdown_v2(spoiler_word)}||"
     try:
-        bot.send_message(chat_id=chat_id, text=msg, parse_mode="MarkdownV2")
+        bot.send_message(chat_id=chat_id, text=msg, parse_mode="MarkdownV2", reply_markup=reply_markup)
     except Exception as e:
         print(f"Ошибка MarkdownV2: {e}")
         fallback = text_main
         if spoiler_word:
             fallback += f"\n\n({spoiler_word})"
-        bot.send_message(chat_id=chat_id, text=fallback)
+        bot.send_message(chat_id=chat_id, text=fallback, reply_markup=reply_markup)
 
 
 def new_state(user_id, lang):
@@ -1099,6 +1099,86 @@ def send_reka_ai(chat_id, user_id, user_text, lang, reply_markup=None):
         bot.send_message(chat_id, plain, reply_markup=reply_markup)
 
 
+# ------------------------------------------------ меню карточек и выход
+K_EXIT = "(´･ω･`)"
+MENU_TXT = {
+    "ru": {"title": "Что тренируем?", "v": "Глаголы", "c": "Цвета", "a": "Всё вместе", "mode": "Режим", "exit": "Выйти"},
+    "en": {"title": "What shall we practice?", "v": "Verbs", "c": "Colors", "a": "Everything", "mode": "Mode", "exit": "Exit"},
+    "uk": {"title": "Що тренуємо?", "v": "Дієслова", "c": "Кольори", "a": "Все разом", "mode": "Режим", "exit": "Вийти"},
+    "es": {"title": "¿Qué practicamos?", "v": "Verbos", "c": "Colores", "a": "Todo", "mode": "Modo", "exit": "Salir"},
+    "fr": {"title": "Qu'est-ce qu'on s'entraîne ?", "v": "Verbes", "c": "Couleurs", "a": "Tout", "mode": "Mode", "exit": "Quitter"},
+    "de": {"title": "Was üben wir?", "v": "Verben", "c": "Farben", "a": "Alles", "mode": "Modus", "exit": "Beenden"},
+    "it": {"title": "Cosa esercitiamo?", "v": "Verbi", "c": "Colori", "a": "Tutto", "mode": "Modalità", "exit": "Esci"},
+    "pl": {"title": "Co ćwiczymy?", "v": "Czasowniki", "c": "Kolory", "a": "Wszystko", "mode": "Tryb", "exit": "Wyjdź"},
+    "zh": {"title": "练习什么？", "v": "动词", "c": "颜色", "a": "全部", "mode": "模式", "exit": "退出"},
+    "pt": {"title": "O que vamos praticar?", "v": "Verbos", "c": "Cores", "a": "Tudo", "mode": "Modo", "exit": "Sair"},
+}
+EXIT_BTNS = {f"{m['exit']} {K_EXIT}" for m in MENU_TXT.values()}
+
+
+def menu_txt(lang):
+    return MENU_TXT.get(lang) or MENU_TXT["en"]
+
+
+def exit_label(lang):
+    return f"{menu_txt(lang)['exit']} {K_EXIT}"
+
+
+def exit_keyboard(lang):
+    """Кнопка выхода внизу экрана на время тренировки глагола."""
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(KeyboardButton(text=exit_label(lang)))
+    return kb
+
+
+def exit_to_menu(chat_id, user_id):
+    """Выход из тренировки или карточек: возвращаем список глаголов."""
+    state = active_trainings.get(user_id)
+    if not state or state.get("lang") not in LANGUAGES:
+        bot.send_message(
+            chat_id,
+            f"{K_LANG} Выберите язык интерфейса / Choose your language:",
+            reply_markup=get_language_keyboard(),
+        )
+        return
+    lang = state["lang"]
+    state.pop("verb", None)
+    state.pop("steps", None)
+    state["step"] = 0
+    bot.send_message(
+        chat_id,
+        f"{random.choice(KAO_DONE)} {LANGUAGES[lang]['welcome']}",
+        reply_markup=get_verbs_keyboard(lang, state.setdefault("recent", [])),
+    )
+
+
+def card_menu_markup(lang):
+    m = menu_txt(lang)
+    cards = available_cards()
+    has_v = any(c.startswith("v:") for c in cards)
+    has_c = any(c.startswith("c:") for c in cards)
+    mk = InlineKeyboardMarkup(row_width=2)
+    row = []
+    if has_v:
+        row.append(InlineKeyboardButton(text=m["v"], callback_data="cm:v"))
+    if has_c:
+        row.append(InlineKeyboardButton(text=m["c"], callback_data="cm:c"))
+    if row:
+        mk.row(*row)
+    if has_v and has_c:
+        mk.row(InlineKeyboardButton(text=m["a"], callback_data="cm:a"))
+    mk.row(InlineKeyboardButton(text=exit_label(lang), callback_data="cq"))
+    return mk
+
+
+def show_card_menu(chat_id, lang):
+    bot.send_message(
+        chat_id,
+        f"{menu_txt(lang)['title']} {random.choice(KAO_HAPPY)}",
+        reply_markup=card_menu_markup(lang),
+    )
+
+
 # Папка с картинками лежит рядом с bot.py: bot.py + cards/ad.jpg, cards/fut.jpg ...
 CARDS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cards")
 
@@ -1208,6 +1288,9 @@ def send_card(chat_id, user_id):
     if not cards:
         bot.send_message(chat_id, NO_CARDS_MSG)
         return
+    mode = state.get("card_mode", "a")
+    if mode in ("v", "c"):
+        cards = [c for c in cards if c.startswith(mode + ":")] or cards
 
     # одна и та же картинка возвращается не раньше чем через 3 других
     hist = state.setdefault("card_hist", [])
@@ -1248,6 +1331,11 @@ def send_card(chat_id, user_id):
 
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(*buttons)
+    m = menu_txt(lang)
+    markup.row(
+        InlineKeyboardButton(text=m["mode"], callback_data="cs"),
+        InlineKeyboardButton(text=exit_label(lang), callback_data="cq"),
+    )
 
     state["last_card"] = key
     state["card_missed"] = False
@@ -1267,7 +1355,13 @@ def start_cards(chat_id, user_id):
     lang = active_trainings.get(user_id, {}).get("lang") or "ru"
     send_reka_chat(chat_id, lang)
     time.sleep(1.0)
-    send_card(chat_id, user_id)
+    show_card_menu(chat_id, lang)
+
+
+@bot.message_handler(commands=["menu", "exit"])
+def cmd_exit(message):
+    all_users.add(message.from_user.id)
+    exit_to_menu(message.chat.id, message.from_user.id)
 
 
 @bot.message_handler(commands=["cards"])
@@ -1277,7 +1371,7 @@ def cmd_cards(message):
 
 
 @bot.callback_query_handler(
-    func=lambda call: call.data in ("cn", "cx") or call.data.startswith(("cd:", "cl:"))
+    func=lambda call: call.data in ("cn", "cx", "cq", "cs") or call.data.startswith(("cd:", "cl:", "cm:"))
 )
 def on_card_callback(call):
     user_id = call.from_user.id
@@ -1288,6 +1382,40 @@ def on_card_callback(call):
     )
     lang = state.get("lang") or "ru"
     t = CARDS_TXT.get(lang, CARDS_TXT["ru"])
+
+    # выбор режима карточек
+    if call.data.startswith("cm:"):
+        state["card_mode"] = call.data.split(":")[1]
+        state["card_ok"] = 0
+        state["card_total"] = 0
+        state["card_hist"] = []
+        bot.answer_callback_query(call.id)
+        try:
+            bot.delete_message(chat_id, msg_id)
+        except Exception:
+            pass
+        send_card(chat_id, user_id)
+        return
+
+    # сменить режим карточек
+    if call.data == "cs":
+        bot.answer_callback_query(call.id)
+        try:
+            bot.edit_message_reply_markup(chat_id, msg_id, reply_markup=None)
+        except Exception:
+            pass
+        show_card_menu(chat_id, lang)
+        return
+
+    # выход из карточек
+    if call.data == "cq":
+        bot.answer_callback_query(call.id)
+        try:
+            bot.edit_message_reply_markup(chat_id, msg_id, reply_markup=None)
+        except Exception:
+            pass
+        exit_to_menu(chat_id, user_id)
+        return
 
     # нажатие на уже подсвеченную зелёную кнопку — ничего не делаем
     if call.data == "cx":
@@ -1346,9 +1474,16 @@ def on_card_callback(call):
             call.id, text=f"{random.choice(KAO_SAD)} {t['no']}"
         )
         old = call.message.reply_markup.keyboard if call.message.reply_markup else []
-        left = [b for row in old for b in row if b.callback_data != call.data]
+        flat = [b for row in old for b in row]
+        opts = [
+            b for b in flat
+            if b.callback_data != call.data and b.callback_data.startswith(("cd:", "cl:"))
+        ]
+        ctrl = [b for b in flat if b.callback_data in ("cs", "cq")]
         new_markup = InlineKeyboardMarkup(row_width=2)
-        new_markup.add(*left)
+        new_markup.add(*opts)
+        if ctrl:
+            new_markup.row(*ctrl)
         bot.edit_message_reply_markup(chat_id, msg_id, reply_markup=new_markup)
 
 
@@ -1408,6 +1543,11 @@ def handle_all_messages(message):
     l_data = LANGUAGES.get(lang, LANGUAGES["ru"])
     recent = data.setdefault("recent", [])
 
+    # --- кнопка выхода
+    if text in EXIT_BTNS:
+        exit_to_menu(message.chat.id, user_id)
+        return
+
     # --- игра с картинками
     if text == CARDS_BTN:
         start_cards(message.chat.id, user_id)
@@ -1428,7 +1568,7 @@ def handle_all_messages(message):
         data["step"] = 1
         question = make_question(l_data, lang, data["steps"], 1, found)
         hint = hint_for(data["steps"][0], found[0], found[3])
-        send_reply(message.chat.id, question, hint)
+        send_reply(message.chat.id, question, hint, exit_keyboard(lang))
         return
 
     # --- проверка ответа
@@ -1468,13 +1608,13 @@ def handle_all_messages(message):
                 praise = f"{l_data['fire']} {random.choice(KAO_GREAT)}"
             question = make_question(l_data, lang, steps, step, verb)
             hint = hint_for(steps[step - 1], hu, inf)
-            send_reply(message.chat.id, f"{praise}\n\n{question}", hint)
+            send_reply(message.chat.id, f"{praise}\n\n{question}", hint, exit_keyboard(lang))
     else:
         retry_text = (
             f"{random.choice(KAO_SAD)} "
             + l_data["retry"].format(v=verb_name(lang, ru, en))
         )
-        send_reply(message.chat.id, retry_text, hint_for(key, hu, inf))
+        send_reply(message.chat.id, retry_text, hint_for(key, hu, inf), exit_keyboard(lang))
 
 
 # ---------------------------------------------------------- напоминания
