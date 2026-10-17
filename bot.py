@@ -5,7 +5,7 @@ import re
 import threading
 import time
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import telebot
@@ -1798,18 +1798,57 @@ WORDS = [
 # фиксированная перестановка: слова идут по кругу и не повторяются, пока не кончится список
 _WORD_ORDER = random.Random(2026).sample(range(len(WORDS)), len(WORDS))
 
-# Пять раз в день (время Будапешта). Не совпадает с обычными напоминаниями 9, 14 и 20 часов.
-WORD_TIMES = [(8, 30), (11, 30), (16, 0), (18, 30), (22, 0)]
+# Слово дня крутится весь день в разных форматах. Звук уведомлений включён.
+WORDS_PER_DAY = 14            # сколько сообщений со словом в день (меняй как хочешь)
+WORD_START = 8 * 60           # с 08:00 (минуты от полуночи)
+WORD_END = 22 * 60 + 30       # до 22:30
+WORD_MIN_GAP = 25             # минимум минут между сообщениями
+# вес формата: обычное «hu — tr» самое частое
+WORD_FORMATS = [("plain", 6), ("spoiler", 2), ("quiz", 2), ("example", 2), ("big", 1.5), ("old", 1.5)]
+OLD_LABELS = {
+    1: {"ru": "вчера", "uk": "вчора", "en": "yesterday"},
+    3: {"ru": "3 дня назад", "uk": "3 дні тому", "en": "3 days ago"},
+    7: {"ru": "неделю назад", "uk": "тиждень тому", "en": "a week ago"},
+}
+QUIZ_RIGHT = {"ru": "верно", "uk": "вірно", "en": "correct"}
 
 
 def word_of_day(day):
     return WORDS[_WORD_ORDER[day.toordinal() % len(WORDS)]]
 
 
+def word_index(w):
+    return WORDS.index(w)
+
+
+def tr_of(lang, w):
+    return w[1] if lang == "ru" else (w[2] if lang == "uk" else w[3])
+
+
+def short_tr(lang, w):
+    """Перевод без скобок и вариантов после « / » (для примеров)."""
+    return tr_of(lang, w).split(" (")[0].split(" / ")[0]
+
+
 def word_text(lang, w):
-    hu, ru, uk, en = w
-    tr = ru if lang == "ru" else (uk if lang == "uk" else en)
-    return f"{hu} — {tr}"
+    return f"{w[0]} — {tr_of(lang, w)}"
+
+
+def day_slots(day):
+    """Время сообщений на день: случайное, но одинаковое после перезапуска. Список минут от полуночи."""
+    rnd = random.Random(day.toordinal() * 7919)
+    span = WORD_END - WORD_START
+    n = WORDS_PER_DAY
+    free = span - (n - 1) * WORD_MIN_GAP
+    cuts = sorted(rnd.randint(0, free) for _ in range(n))
+    return [WORD_START + c + i * WORD_MIN_GAP for i, c in enumerate(cuts)]
+
+
+def slot_format(day, i):
+    rnd = random.Random(day.toordinal() * 104729 + i)
+    names = [f for f, _ in WORD_FORMATS]
+    weights = [w for _, w in WORD_FORMATS]
+    return rnd.choices(names, weights)[0]
 
 
 def budapest_now():
@@ -1851,10 +1890,59 @@ def send_reminder(user_id, time_key):
         )
 
 
-def send_word(user_id, w):
-    """Только «слово — перевод», без кнопок: клавиатура и тренировка не трогаются."""
+def send_word(user_id, w, fmt="plain", day=None):
+    """Сообщение со словом дня. Без disable_notification: звук включён. Клавиатура и тренировка не трогаются."""
     lang = active_trainings.get(user_id, {}).get("lang") or "ru"
-    bot.send_message(user_id, word_text(lang, w))
+    hu = w[0]
+    if fmt == "spoiler":
+        bot.send_message(
+            user_id, f"{escape_markdown_v2(hu)} — ||{escape_markdown_v2(tr_of(lang, w))}||",
+            parse_mode="MarkdownV2")
+    elif fmt == "quiz":
+        others = random.sample([x for x in WORDS if x != w], 2)
+        opts = others + [w]
+        random.shuffle(opts)
+        kb = InlineKeyboardMarkup()
+        kb.row(*[InlineKeyboardButton(o[0], callback_data=f"wq:{word_index(w)}:{word_index(o)}") for o in opts])
+        bot.send_message(user_id, f"{tr_of(lang, w)} — ?", reply_markup=kb)
+    elif fmt == "example":
+        sent_hu = f"Nagyon {hu}."
+        pre = {"ru": "Очень", "uk": "Дуже", "en": "Very"}.get(lang, "Very")
+        bot.send_message(user_id, f"{hu} — {sent_hu}\n({pre} {short_tr(lang, w)})")
+    elif fmt == "big":
+        bot.send_message(user_id, f"*{escape_markdown_v2(hu.upper())}*", parse_mode="MarkdownV2")
+    elif fmt == "old" and day is not None:
+        n = random.choice([1, 3, 7])
+        old = word_of_day(day - timedelta(days=n))
+        if old == w:
+            bot.send_message(user_id, word_text(lang, w))
+        else:
+            label = OLD_LABELS[n].get(lang, OLD_LABELS[n]["en"])
+            bot.send_message(user_id, f"{label}: {word_text(lang, old)}")
+    else:
+        bot.send_message(user_id, word_text(lang, w))
+
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("wq:"))
+def on_word_quiz(call):
+    try:
+        _, wi, oi = call.data.split(":")
+        w, o = WORDS[int(wi)], WORDS[int(oi)]
+        lang = active_trainings.get(call.from_user.id, {}).get("lang") or "ru"
+        if w == o:
+            bot.edit_message_text(f"✅ {word_text(lang, w)}", call.message.chat.id, call.message.message_id)
+            bot.answer_callback_query(call.id, "✅")
+        else:
+            kb = InlineKeyboardMarkup()
+            kb.row(*[b for b in call.message.reply_markup.keyboard[0] if b.callback_data != call.data])
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=kb)
+            bot.answer_callback_query(call.id, "❌")
+    except Exception as e:
+        print(f"Ошибка quiz слова: {e}")
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
 
 
 def scheduler_tick(now):
@@ -1873,15 +1961,16 @@ def scheduler_tick(now):
                 print(f"Ошибка напоминания {user_id}: {e}")
             time.sleep(0.05)
 
-    # слово дня: одно и то же слово пять раз за день
-    for i, (sh, sm) in enumerate(WORD_TIMES):
-        start = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
-        if 0 <= (now - start).total_seconds() < 20 * 60 and (today, "w", i) not in _sent:
+    # слово дня: одно слово весь день, форматы чередуются
+    now_min = now.hour * 60 + now.minute
+    for i, m in enumerate(day_slots(today)):
+        if 0 <= now_min - m < 20 and (today, "w", i) not in _sent:
             _sent.add((today, "w", i))
             w = word_of_day(today)
+            fmt = slot_format(today, i)
             for user_id in list(all_users):
                 try:
-                    send_word(user_id, w)
+                    send_word(user_id, w, fmt, today)
                 except Exception as e:
                     print(f"Ошибка слова дня {user_id}: {e}")
                 time.sleep(0.05)
