@@ -16,6 +16,7 @@ except Exception:  # библиотека не установлена — бот
 from telebot.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaPhoto,
     KeyboardButton,
     ReplyKeyboardMarkup,
 )
@@ -1338,7 +1339,7 @@ def card_path(key):
     return os.path.join(CARDS_DIR, fn)
 
 
-def send_card(chat_id, user_id):
+def send_card(chat_id, user_id, replace_msg_id=None):
     """Присылает картинку Réka и 4 кнопки (глагол или цвет)."""
     state = active_trainings.setdefault(
         user_id, {"lang": None, "step": 0, "recent": []}
@@ -1403,6 +1404,32 @@ def send_card(chat_id, user_id):
     state["card_missed"] = False
     caption = f"{question} {random.choice(KAO_HAPPY)}"
 
+    # Следующая карточка заменяет предыдущую в том же сообщении:
+    # в чате и во вкладке «Медиа» не копятся десятки картинок.
+    if replace_msg_id:
+        try:
+            file_id = CARD_FILE_IDS.get(key)
+            if file_id:
+                bot.edit_message_media(
+                    InputMediaPhoto(file_id, caption=caption),
+                    chat_id, replace_msg_id, reply_markup=markup,
+                )
+            else:
+                with open(card_path(key), "rb") as f:
+                    res = bot.edit_message_media(
+                        InputMediaPhoto(f, caption=caption),
+                        chat_id, replace_msg_id, reply_markup=markup,
+                    )
+                if getattr(res, "photo", None):
+                    CARD_FILE_IDS[key] = res.photo[-1].file_id
+            return
+        except Exception as e:
+            print(f"Не удалось заменить карточку, шлю новую: {e}")
+            try:
+                bot.delete_message(chat_id, replace_msg_id)
+            except Exception:
+                pass
+
     file_id = CARD_FILE_IDS.get(key)
     if file_id:
         bot.send_photo(chat_id, file_id, caption=caption, reply_markup=markup)
@@ -1410,6 +1437,17 @@ def send_card(chat_id, user_id):
         with open(card_path(key), "rb") as f:
             msg = bot.send_photo(chat_id, f, caption=caption, reply_markup=markup)
         CARD_FILE_IDS[key] = msg.photo[-1].file_id
+
+
+def drop_card_message(chat_id, msg_id):
+    """Удаляем карточку из чата (если не вышло, хотя бы убираем кнопки)."""
+    try:
+        bot.delete_message(chat_id, msg_id)
+    except Exception:
+        try:
+            bot.edit_message_reply_markup(chat_id, msg_id, reply_markup=None)
+        except Exception:
+            pass
 
 
 def start_cards(chat_id, user_id):
@@ -1462,20 +1500,14 @@ def on_card_callback(call):
     # сменить режим карточек
     if call.data == "cs":
         bot.answer_callback_query(call.id)
-        try:
-            bot.edit_message_reply_markup(chat_id, msg_id, reply_markup=None)
-        except Exception:
-            pass
+        drop_card_message(chat_id, msg_id)
         show_card_menu(chat_id, lang)
         return
 
     # выход из карточек
     if call.data == "cq":
         bot.answer_callback_query(call.id)
-        try:
-            bot.edit_message_reply_markup(chat_id, msg_id, reply_markup=None)
-        except Exception:
-            pass
+        drop_card_message(chat_id, msg_id)
         exit_to_menu(chat_id, user_id)
         return
 
@@ -1529,7 +1561,7 @@ def on_card_callback(call):
         except Exception:
             pass
         time.sleep(1.2)  # даём увидеть зелёный ответ
-        send_card(chat_id, user_id)
+        send_card(chat_id, user_id, replace_msg_id=msg_id)
     else:
         state["card_missed"] = True
         bot.answer_callback_query(
