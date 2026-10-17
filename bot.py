@@ -1,3 +1,4 @@
+import json
 import os
 import random
 import re
@@ -33,7 +34,46 @@ BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
 RECENT_LIMIT = 6
 
 active_trainings = {}
-all_users = set()
+USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
+
+
+def save_users():
+    """Запоминаем пользователей и язык в файл, чтобы рассылки переживали перезапуск."""
+    try:
+        data = {
+            str(u): (active_trainings.get(u) or {}).get("lang") for u in all_users
+        }
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception as e:
+        print(f"Не удалось сохранить users.json: {e}")
+
+
+class UserSet(set):
+    def add(self, x):
+        is_new = x not in self
+        super().add(x)
+        if is_new:
+            save_users()
+
+
+all_users = UserSet()
+
+
+def load_users():
+    try:
+        with open(USERS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return
+    for k, lang in data.items():
+        uid = int(k)
+        set.add(all_users, uid)
+        if lang:
+            active_trainings.setdefault(uid, {"lang": lang, "step": 0, "recent": []})
+
+
+load_users()
 
 # (форма «он/она» = ключ, русский, английский, инфинитив)
 VERBS_DATABASE = [
@@ -855,8 +895,7 @@ def get_verbs_keyboard(lang="ru", exclude=()):
     markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     for hu, ru, en, inf in selected:
         markup.add(KeyboardButton(text=f"{hu} ({verb_name(lang, ru, en)})"))
-    if available_cards():
-        markup.add(KeyboardButton(text=CARDS_BTN))
+    markup.add(KeyboardButton(text=exit_label(lang)))
     return markup
 
 
@@ -897,6 +936,7 @@ def send_reply(chat_id, text_main, spoiler_word="", reply_markup=None):
 def new_state(user_id, lang):
     recent = active_trainings.get(user_id, {}).get("recent", [])
     active_trainings[user_id] = {"lang": lang, "step": 0, "recent": recent}
+    save_users()
     return active_trainings[user_id]
 
 
@@ -1102,16 +1142,16 @@ def send_reka_ai(chat_id, user_id, user_text, lang, reply_markup=None):
 # ------------------------------------------------ меню карточек и выход
 K_EXIT = "(´･ω･`)"
 MENU_TXT = {
-    "ru": {"title": "Что тренируем?", "v": "Глаголы", "c": "Цвета", "a": "Всё вместе", "mode": "Режим", "exit": "Выйти"},
-    "en": {"title": "What shall we practice?", "v": "Verbs", "c": "Colors", "a": "Everything", "mode": "Mode", "exit": "Exit"},
-    "uk": {"title": "Що тренуємо?", "v": "Дієслова", "c": "Кольори", "a": "Все разом", "mode": "Режим", "exit": "Вийти"},
-    "es": {"title": "¿Qué practicamos?", "v": "Verbos", "c": "Colores", "a": "Todo", "mode": "Modo", "exit": "Salir"},
-    "fr": {"title": "Qu'est-ce qu'on s'entraîne ?", "v": "Verbes", "c": "Couleurs", "a": "Tout", "mode": "Mode", "exit": "Quitter"},
-    "de": {"title": "Was üben wir?", "v": "Verben", "c": "Farben", "a": "Alles", "mode": "Modus", "exit": "Beenden"},
-    "it": {"title": "Cosa esercitiamo?", "v": "Verbi", "c": "Colori", "a": "Tutto", "mode": "Modalità", "exit": "Esci"},
-    "pl": {"title": "Co ćwiczymy?", "v": "Czasowniki", "c": "Kolory", "a": "Wszystko", "mode": "Tryb", "exit": "Wyjdź"},
-    "zh": {"title": "练习什么？", "v": "动词", "c": "颜色", "a": "全部", "mode": "模式", "exit": "退出"},
-    "pt": {"title": "O que vamos praticar?", "v": "Verbos", "c": "Cores", "a": "Tudo", "mode": "Modo", "exit": "Sair"},
+    "ru": {"main": "Выбери раздел:", "title": "Что тренируем?", "v": "Глаголы", "c": "Цвета", "a": "Всё вместе", "mode": "Режим", "exit": "Выйти"},
+    "en": {"main": "Choose a section:", "title": "What shall we practice?", "v": "Verbs", "c": "Colors", "a": "Everything", "mode": "Mode", "exit": "Exit"},
+    "uk": {"main": "Обери розділ:", "title": "Що тренуємо?", "v": "Дієслова", "c": "Кольори", "a": "Все разом", "mode": "Режим", "exit": "Вийти"},
+    "es": {"main": "Elige una sección:", "title": "¿Qué practicamos?", "v": "Verbos", "c": "Colores", "a": "Todo", "mode": "Modo", "exit": "Salir"},
+    "fr": {"main": "Choisis une section :", "title": "Qu'est-ce qu'on s'entraîne ?", "v": "Verbes", "c": "Couleurs", "a": "Tout", "mode": "Mode", "exit": "Quitter"},
+    "de": {"main": "Wähle einen Bereich:", "title": "Was üben wir?", "v": "Verben", "c": "Farben", "a": "Alles", "mode": "Modus", "exit": "Beenden"},
+    "it": {"main": "Scegli una sezione:", "title": "Cosa esercitiamo?", "v": "Verbi", "c": "Colori", "a": "Tutto", "mode": "Modalità", "exit": "Esci"},
+    "pl": {"main": "Wybierz dział:", "title": "Co ćwiczymy?", "v": "Czasowniki", "c": "Kolory", "a": "Wszystko", "mode": "Tryb", "exit": "Wyjdź"},
+    "zh": {"main": "请选择板块：", "title": "练习什么？", "v": "动词", "c": "颜色", "a": "全部", "mode": "模式", "exit": "退出"},
+    "pt": {"main": "Escolha uma seção:", "title": "O que vamos praticar?", "v": "Verbos", "c": "Cores", "a": "Tudo", "mode": "Modo", "exit": "Sair"},
 }
 EXIT_BTNS = {f"{m['exit']} {K_EXIT}" for m in MENU_TXT.values()}
 
@@ -1131,6 +1171,28 @@ def exit_keyboard(lang):
     return kb
 
 
+K_VERBS = "ʕ•ᴥ•ʔ"
+VERBS_BTNS = {f"{m['v']} {K_VERBS}" for m in MENU_TXT.values()}
+
+
+def verbs_label(lang):
+    return f"{menu_txt(lang)['v']} {K_VERBS}"
+
+
+def main_keyboard(lang):
+    """Главное меню: только «Глаголы» и «Cards»."""
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    row = [KeyboardButton(text=verbs_label(lang))]
+    if available_cards():
+        row.append(KeyboardButton(text=CARDS_BTN))
+    kb.row(*row)
+    return kb
+
+
+def main_prompt(lang):
+    return f"{random.choice(KAO_HAPPY)} {menu_txt(lang)['main']}"
+
+
 def exit_to_menu(chat_id, user_id):
     """Выход из тренировки или карточек: возвращаем список глаголов."""
     state = active_trainings.get(user_id)
@@ -1147,8 +1209,8 @@ def exit_to_menu(chat_id, user_id):
     state["step"] = 0
     bot.send_message(
         chat_id,
-        f"{random.choice(KAO_DONE)} {LANGUAGES[lang]['welcome']}",
-        reply_markup=get_verbs_keyboard(lang, state.setdefault("recent", [])),
+        f"{random.choice(KAO_DONE)} {menu_txt(lang)['main']}",
+        reply_markup=main_keyboard(lang),
     )
 
 
@@ -1498,8 +1560,8 @@ def cmd_start(message):
         data = new_state(user_id, current_lang)
         bot.send_message(
             message.chat.id,
-            LANGUAGES[current_lang]["welcome"],
-            reply_markup=get_verbs_keyboard(current_lang, data["recent"]),
+            main_prompt(current_lang),
+            reply_markup=main_keyboard(current_lang),
         )
     else:
         new_state(user_id, None)
@@ -1533,8 +1595,8 @@ def handle_all_messages(message):
         data = new_state(user_id, selected_lang)
         bot.send_message(
             message.chat.id,
-            LANGUAGES[selected_lang]["welcome"],
-            reply_markup=get_verbs_keyboard(selected_lang, data["recent"]),
+            main_prompt(selected_lang),
+            reply_markup=main_keyboard(selected_lang),
         )
         return
 
@@ -1548,6 +1610,15 @@ def handle_all_messages(message):
         exit_to_menu(message.chat.id, user_id)
         return
 
+    # --- раздел «Глаголы»
+    if text in VERBS_BTNS and "verb" not in data:
+        bot.send_message(
+            message.chat.id,
+            l_data["choose_btn"],
+            reply_markup=get_verbs_keyboard(lang, recent),
+        )
+        return
+
     # --- игра с картинками
     if text == CARDS_BTN:
         start_cards(message.chat.id, user_id)
@@ -1559,7 +1630,7 @@ def handle_all_messages(message):
         if not found:
             send_reka_ai(
                 message.chat.id, user_id, text, lang,
-                reply_markup=get_verbs_keyboard(lang, recent),
+                reply_markup=main_keyboard(lang),
             )
             return
 
@@ -1617,42 +1688,180 @@ def handle_all_messages(message):
         send_reply(message.chat.id, retry_text, hint_for(key, hu, inf), exit_keyboard(lang))
 
 
+# ---------------------------------------------------------- слово дня
+# (венгерский, русский, украинский, английский)
+WORDS = [
+    ("éhes", "голодный", "голодний", "hungry"),
+    ("szomjas", "жаждущий", "спраглий", "thirsty"),
+    ("meleg", "тёплый", "теплий", "warm"),
+    ("hideg", "холодный", "холодний", "cold"),
+    ("forró", "горячий", "гарячий", "hot"),
+    ("hűvös", "прохладный", "прохолодний", "cool"),
+    ("nagy", "большой", "великий", "big"),
+    ("kicsi", "маленький", "маленький", "small"),
+    ("szép", "красивый", "гарний", "beautiful"),
+    ("csúnya", "некрасивый", "негарний", "ugly"),
+    ("jó", "хороший", "добрий", "good"),
+    ("rossz", "плохой", "поганий", "bad"),
+    ("új", "новый", "новий", "new"),
+    ("régi", "старый (давний)", "старий (давній)", "old (of things)"),
+    ("gyors", "быстрый", "швидкий", "fast"),
+    ("lassú", "медленный", "повільний", "slow"),
+    ("magas", "высокий", "високий", "tall"),
+    ("alacsony", "низкий", "низький", "short / low"),
+    ("hosszú", "длинный", "довгий", "long"),
+    ("rövid", "короткий", "короткий", "short"),
+    ("vastag", "толстый", "товстий", "thick"),
+    ("vékony", "тонкий", "тонкий", "thin"),
+    ("olcsó", "дешёвый", "дешевий", "cheap"),
+    ("drága", "дорогой", "дорогий", "expensive"),
+    ("könnyű", "лёгкий", "легкий", "easy / light"),
+    ("nehéz", "тяжёлый / трудный", "важкий / складний", "heavy / difficult"),
+    ("boldog", "счастливый", "щасливий", "happy"),
+    ("szomorú", "грустный", "сумний", "sad"),
+    ("fáradt", "усталый", "втомлений", "tired"),
+    ("vidám", "весёлый", "веселий", "cheerful"),
+    ("okos", "умный", "розумний", "smart"),
+    ("buta", "глупый", "дурний", "stupid"),
+    ("erős", "сильный", "сильний", "strong"),
+    ("gyenge", "слабый", "слабкий", "weak"),
+    ("tiszta", "чистый", "чистий", "clean"),
+    ("piszkos", "грязный", "брудний", "dirty"),
+    ("nyitott", "открытый", "відкритий", "open"),
+    ("zárt", "закрытый", "закритий", "closed"),
+    ("üres", "пустой", "порожній", "empty"),
+    ("tele", "полный", "повний", "full"),
+    ("fiatal", "молодой", "молодий", "young"),
+    ("öreg", "старый (о человеке)", "старий (про людину)", "old (of people)"),
+    ("gazdag", "богатый", "багатий", "rich"),
+    ("szegény", "бедный", "бідний", "poor"),
+    ("édes", "сладкий", "солодкий", "sweet"),
+    ("savanyú", "кислый", "кислий", "sour"),
+    ("finom", "вкусный", "смачний", "tasty"),
+    ("csendes", "тихий", "тихий", "quiet"),
+    ("hangos", "громкий", "гучний", "loud"),
+    ("sötét", "тёмный", "темний", "dark"),
+    ("világos", "светлый", "світлий", "light / bright"),
+    ("puha", "мягкий", "м'який", "soft"),
+    ("kemény", "твёрдый", "твердий", "hard"),
+    ("száraz", "сухой", "сухий", "dry"),
+    ("nedves", "мокрый", "мокрий", "wet"),
+    ("egészséges", "здоровый", "здоровий", "healthy"),
+    ("beteg", "больной", "хворий", "sick"),
+    ("szabad", "свободный", "вільний", "free"),
+    ("elfoglalt", "занятой", "зайнятий", "busy"),
+    ("kedves", "милый / добрый", "милий / добрий", "kind / sweet"),
+    ("bátor", "смелый", "сміливий", "brave"),
+    ("mérges", "злой / сердитый", "злий / сердитий", "angry"),
+    ("kíváncsi", "любопытный", "допитливий", "curious"),
+    ("unalmas", "скучный", "нудний", "boring"),
+    ("érdekes", "интересный", "цікавий", "interesting"),
+    ("fontos", "важный", "важливий", "important"),
+    ("veszélyes", "опасный", "небезпечний", "dangerous"),
+    ("biztonságos", "безопасный", "безпечний", "safe"),
+    ("mély", "глубокий", "глибокий", "deep"),
+    ("széles", "широкий", "широкий", "wide"),
+    ("keskeny", "узкий", "вузький", "narrow"),
+]
+# фиксированная перестановка: слова идут по кругу и не повторяются, пока не кончится список
+_WORD_ORDER = random.Random(2026).sample(range(len(WORDS)), len(WORDS))
+
+# Пять раз в день (время Будапешта). Не совпадает с обычными напоминаниями 9, 14 и 20 часов.
+WORD_TIMES = [(8, 30), (11, 30), (16, 0), (18, 30), (22, 0)]
+
+
+def word_of_day(day):
+    return WORDS[_WORD_ORDER[day.toordinal() % len(WORDS)]]
+
+
+def word_text(lang, w):
+    hu, ru, uk, en = w
+    tr = ru if lang == "ru" else (uk if lang == "uk" else en)
+    return f"{hu} — {tr}"
+
+
+def budapest_now():
+    return datetime.now(BUDAPEST_TZ)
+
+
+@bot.message_handler(commands=["word"])
+def cmd_word(message):
+    all_users.add(message.from_user.id)
+    lang = active_trainings.get(message.from_user.id, {}).get("lang") or "ru"
+    bot.send_message(message.chat.id, word_text(lang, word_of_day(budapest_now().date())))
+
+
 # ---------------------------------------------------------- напоминания
+REMIND_HOURS = {9: "morning", 14: "day", 20: "evening"}
+_sent = set()
+
+
+def send_reminder(user_id, time_key):
+    state = active_trainings.get(user_id, {})
+    user_lang = state.get("lang") or "ru"
+    l_data = LANGUAGES.get(user_lang, LANGUAGES["ru"])
+    # сбрасываем незаконченную тренировку, чтобы кнопки работали
+    state.pop("verb", None)
+    state.pop("steps", None)
+    state["step"] = 0
+    state.setdefault("lang", user_lang)
+    state.setdefault("recent", [])
+    active_trainings[user_id] = state
+    try:
+        bot.send_message(
+            user_id, reka_chat(user_lang), parse_mode="MarkdownV2",
+            reply_markup=main_keyboard(user_lang),
+        )
+    except Exception:
+        bot.send_message(
+            user_id, f"{l_data[time_key]} {random.choice(KAO_TIME[time_key])}",
+            reply_markup=main_keyboard(user_lang),
+        )
+
+
+def send_word(user_id, w):
+    """Только «слово — перевод», без кнопок: клавиатура и тренировка не трогаются."""
+    lang = active_trainings.get(user_id, {}).get("lang") or "ru"
+    bot.send_message(user_id, word_text(lang, w))
+
+
+def scheduler_tick(now):
+    today = now.date()
+    for k in [k for k in _sent if k[0] != today]:
+        _sent.discard(k)
+
+    # обычные напоминания (утро, день, вечер)
+    h = now.hour
+    if h in REMIND_HOURS and now.minute < 30 and (today, "r", h) not in _sent:
+        _sent.add((today, "r", h))
+        for user_id in list(all_users):
+            try:
+                send_reminder(user_id, REMIND_HOURS[h])
+            except Exception as e:
+                print(f"Ошибка напоминания {user_id}: {e}")
+            time.sleep(0.05)
+
+    # слово дня: одно и то же слово пять раз за день
+    for i, (sh, sm) in enumerate(WORD_TIMES):
+        start = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+        if 0 <= (now - start).total_seconds() < 20 * 60 and (today, "w", i) not in _sent:
+            _sent.add((today, "w", i))
+            w = word_of_day(today)
+            for user_id in list(all_users):
+                try:
+                    send_word(user_id, w)
+                except Exception as e:
+                    print(f"Ошибка слова дня {user_id}: {e}")
+                time.sleep(0.05)
+
 
 def daily_reminders_loop():
     while True:
-        now_hour = datetime.now(BUDAPEST_TZ).hour
-        if now_hour in (9, 14, 20):
-            time_key = (
-                "morning" if now_hour == 9 else ("day" if now_hour == 14 else "evening")
-            )
-            for user_id in list(all_users):
-                try:
-                    state = active_trainings.get(user_id, {})
-                    user_lang = state.get("lang") or "ru"
-                    l_data = LANGUAGES.get(user_lang, LANGUAGES["ru"])
-                    # сбрасываем незаконченную тренировку, чтобы кнопки работали
-                    state.pop("verb", None)
-                    state.pop("steps", None)
-                    state["step"] = 0
-                    state.setdefault("lang", user_lang)
-                    state.setdefault("recent", [])
-                    active_trainings[user_id] = state
-                    try:
-                        bot.send_message(
-                            user_id, reka_chat(user_lang), parse_mode="MarkdownV2",
-                            reply_markup=get_verbs_keyboard(user_lang, state["recent"]),
-                        )
-                    except Exception:
-                        bot.send_message(
-                            user_id, f"{l_data[time_key]} {random.choice(KAO_TIME[time_key])}",
-                            reply_markup=get_verbs_keyboard(user_lang, state["recent"]),
-                        )
-                except Exception as e:
-                    print(f"Ошибка отправки напоминания пользователю {user_id}: {e}")
-            time.sleep(3700)
-        else:
-            time.sleep(600)
+        try:
+            scheduler_tick(budapest_now())
+        except Exception as e:
+            print(f"Ошибка планировщика: {e}")
+        time.sleep(20)
 
 
 threading.Thread(target=daily_reminders_loop, daemon=True).start()
