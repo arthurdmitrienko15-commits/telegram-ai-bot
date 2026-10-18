@@ -1604,122 +1604,6 @@ def cmd_start(message):
         )
 
 
-@bot.message_handler(func=lambda message: True)
-def handle_all_messages(message):
-    if not message.text:
-        return
-
-    user_id = message.from_user.id
-    all_users.add(user_id)
-    text = message.text.strip()
-
-    # --- выбор языка
-    if (
-        user_id not in active_trainings
-        or active_trainings[user_id].get("lang") is None
-    ):
-        selected_lang = "ru"
-        for code, info in LANGUAGES.items():
-            if text == info["name"]:
-                selected_lang = code
-                break
-
-        data = new_state(user_id, selected_lang)
-        bot.send_message(
-            message.chat.id,
-            main_prompt(selected_lang),
-            reply_markup=main_keyboard(selected_lang),
-        )
-        return
-
-    data = active_trainings[user_id]
-    lang = data["lang"]
-    l_data = LANGUAGES.get(lang, LANGUAGES["ru"])
-    recent = data.setdefault("recent", [])
-
-    # --- кнопка выхода
-    if text in EXIT_BTNS:
-        exit_to_menu(message.chat.id, user_id)
-        return
-
-    # --- раздел «Глаголы»
-    if text in VERBS_BTNS and "verb" not in data:
-        bot.send_message(
-            message.chat.id,
-            l_data["choose_btn"],
-            reply_markup=get_verbs_keyboard(lang, recent),
-        )
-        return
-
-    # --- игра с картинками
-    if text == CARDS_BTN:
-        start_cards(message.chat.id, user_id)
-        return
-
-    # --- выбор глагола
-    if "verb" not in data:
-        found = find_verb(text)
-        if not found:
-            send_reka_ai(
-                message.chat.id, user_id, text, lang,
-                reply_markup=main_keyboard(lang),
-            )
-            return
-
-        data["verb"] = found
-        data["steps"] = build_steps(found[0], l_data)
-        data["step"] = 1
-        question = make_question(l_data, lang, data["steps"], 1, found)
-        hint = hint_for(data["steps"][0], found[0], found[3])
-        send_reply(message.chat.id, question, hint, exit_keyboard(lang))
-        return
-
-    # --- проверка ответа
-    verb = data["verb"]
-    hu, ru, en, inf = verb
-    steps = data["steps"]
-    step = data["step"]
-    key = steps[step - 1]
-    answers = answers_for(key, hu, inf)
-
-    user_text = norm(text)
-    if key != "q":
-        user_text = strip_pronoun(user_text)
-
-    if user_text in [norm(a) for a in answers]:
-        step += 1
-        data["step"] = step
-
-        if step > len(steps):
-            # глагол пройден целиком
-            data.pop("verb", None)
-            data.pop("steps", None)
-            data["step"] = 0
-            recent.append(hu)
-            data["recent"] = recent[-RECENT_LIMIT:]
-            send_reka_chat(message.chat.id, lang)
-            time.sleep(1.0)
-            bot.send_message(
-                message.chat.id,
-                f"{random.choice(KAO_DONE)} {l_data['finish']}",
-                reply_markup=get_verbs_keyboard(lang, data["recent"]),
-            )
-        else:
-            if step % 2 == 0:
-                praise = f"{l_data['correct']} {random.choice(KAO_HAPPY)}"
-            else:
-                praise = f"{l_data['fire']} {random.choice(KAO_GREAT)}"
-            question = make_question(l_data, lang, steps, step, verb)
-            hint = hint_for(steps[step - 1], hu, inf)
-            send_reply(message.chat.id, f"{praise}\n\n{question}", hint, exit_keyboard(lang))
-    else:
-        retry_text = (
-            f"{random.choice(KAO_SAD)} "
-            + l_data["retry"].format(v=verb_name(lang, ru, en))
-        )
-        send_reply(message.chat.id, retry_text, hint_for(key, hu, inf), exit_keyboard(lang))
-
-
 # ---------------------------------------------------------- слово дня
 # (венгерский, русский, украинский, английский)
 WORDS = [
@@ -1971,28 +1855,31 @@ def send_word(user_id, w, fmt="plain", day=None):
     if fmt == "spoiler":
         bot.send_message(
             user_id, f"{escape_markdown_v2(hu)} — ||{escape_markdown_v2(tr_of(lang, w))}||",
-            parse_mode="MarkdownV2")
+            parse_mode="MarkdownV2", reply_markup=change_markup(lang))
     elif fmt == "quiz":
         others = random.sample([x for x in WORDS if x != w], 2)
         opts = others + [w]
         random.shuffle(opts)
         kb = InlineKeyboardMarkup()
         kb.row(*[InlineKeyboardButton(o[0], callback_data=f"wq:{word_index(w)}:{word_index(o)}") for o in opts])
+        kb.row(InlineKeyboardButton(CHANGE_BTN.get(lang, CHANGE_BTN["en"]), callback_data="wn"))
         bot.send_message(user_id, f"{tr_of(lang, w)} — ?", reply_markup=kb)
     elif fmt == "example":
         sent_hu = f"Nagyon {hu}."
         pre = {"ru": "Очень", "uk": "Дуже", "en": "Very"}.get(lang, "Very")
-        bot.send_message(user_id, f"{hu} — {sent_hu}\n({pre} {short_tr(lang, w)})")
+        bot.send_message(user_id, f"{hu} — {sent_hu}\n({pre} {short_tr(lang, w)})",
+                         reply_markup=change_markup(lang))
     elif fmt == "big":
-        bot.send_message(user_id, f"*{escape_markdown_v2(hu.upper())}*", parse_mode="MarkdownV2")
+        bot.send_message(user_id, f"*{escape_markdown_v2(hu.upper())}*", parse_mode="MarkdownV2",
+                         reply_markup=change_markup(lang))
     elif fmt == "old" and day is not None:
         n = random.choice([1, 3, 7])
         old = word_of_day(day - timedelta(days=n))
         if old == w or WORDS.index(old) in user_known(user_id):
-            bot.send_message(user_id, word_text(lang, w))
+            bot.send_message(user_id, word_text(lang, w), reply_markup=change_markup(lang))
         else:
             label = OLD_LABELS[n].get(lang, OLD_LABELS[n]["en"])
-            bot.send_message(user_id, f"{label}: {word_text(lang, old)}")
+            bot.send_message(user_id, f"{label}: {word_text(lang, old)}", reply_markup=change_markup(lang))
     else:
         bot.send_message(user_id, word_text(lang, w), reply_markup=change_markup(lang))
 
@@ -2025,7 +1912,10 @@ def on_word_quiz(call):
             bot.answer_callback_query(call.id, "✅")
         else:
             kb = InlineKeyboardMarkup()
-            kb.row(*[b for b in call.message.reply_markup.keyboard[0] if b.callback_data != call.data])
+            for r in call.message.reply_markup.keyboard:
+                row = [b for b in r if b.callback_data != call.data]
+                if row:
+                    kb.row(*row)
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=kb)
             bot.answer_callback_query(call.id, "❌")
     except Exception as e:
@@ -2074,6 +1964,133 @@ def daily_reminders_loop():
             print(f"Ошибка планировщика: {e}")
         time.sleep(20)
 
+
+# обработчик «всё остальное» обязан быть последним: telebot берёт первый подходящий
+@bot.message_handler(func=lambda message: True)
+def handle_all_messages(message):
+    if not message.text:
+        return
+
+    user_id = message.from_user.id
+    all_users.add(user_id)
+    text = message.text.strip()
+
+    # --- выбор языка
+    if (
+        user_id not in active_trainings
+        or active_trainings[user_id].get("lang") is None
+    ):
+        selected_lang = "ru"
+        for code, info in LANGUAGES.items():
+            if text == info["name"]:
+                selected_lang = code
+                break
+
+        data = new_state(user_id, selected_lang)
+        bot.send_message(
+            message.chat.id,
+            main_prompt(selected_lang),
+            reply_markup=main_keyboard(selected_lang),
+        )
+        return
+
+    data = active_trainings[user_id]
+    lang = data["lang"]
+    l_data = LANGUAGES.get(lang, LANGUAGES["ru"])
+    recent = data.setdefault("recent", [])
+
+    # --- кнопка выхода
+    if text in EXIT_BTNS:
+        exit_to_menu(message.chat.id, user_id)
+        return
+
+    # --- раздел «Глаголы»
+    if text in VERBS_BTNS and "verb" not in data:
+        bot.send_message(
+            message.chat.id,
+            l_data["choose_btn"],
+            reply_markup=get_verbs_keyboard(lang, recent),
+        )
+        return
+
+    # --- игра с картинками
+    if text == CARDS_BTN:
+        start_cards(message.chat.id, user_id)
+        return
+
+    # --- выбор глагола
+    if "verb" not in data:
+        found = find_verb(text)
+        if not found:
+            send_reka_ai(
+                message.chat.id, user_id, text, lang,
+                reply_markup=main_keyboard(lang),
+            )
+            return
+
+        data["verb"] = found
+        data["steps"] = build_steps(found[0], l_data)
+        data["step"] = 1
+        question = make_question(l_data, lang, data["steps"], 1, found)
+        hint = hint_for(data["steps"][0], found[0], found[3])
+        send_reply(message.chat.id, question, hint, exit_keyboard(lang))
+        return
+
+    # --- проверка ответа
+    verb = data["verb"]
+    hu, ru, en, inf = verb
+    steps = data["steps"]
+    step = data["step"]
+    key = steps[step - 1]
+    answers = answers_for(key, hu, inf)
+
+    user_text = norm(text)
+    if key != "q":
+        user_text = strip_pronoun(user_text)
+
+    if user_text in [norm(a) for a in answers]:
+        step += 1
+        data["step"] = step
+
+        if step > len(steps):
+            # глагол пройден целиком
+            data.pop("verb", None)
+            data.pop("steps", None)
+            data["step"] = 0
+            recent.append(hu)
+            data["recent"] = recent[-RECENT_LIMIT:]
+            send_reka_chat(message.chat.id, lang)
+            time.sleep(1.0)
+            bot.send_message(
+                message.chat.id,
+                f"{random.choice(KAO_DONE)} {l_data['finish']}",
+                reply_markup=get_verbs_keyboard(lang, data["recent"]),
+            )
+        else:
+            if step % 2 == 0:
+                praise = f"{l_data['correct']} {random.choice(KAO_HAPPY)}"
+            else:
+                praise = f"{l_data['fire']} {random.choice(KAO_GREAT)}"
+            question = make_question(l_data, lang, steps, step, verb)
+            hint = hint_for(steps[step - 1], hu, inf)
+            send_reply(message.chat.id, f"{praise}\n\n{question}", hint, exit_keyboard(lang))
+    else:
+        retry_text = (
+            f"{random.choice(KAO_SAD)} "
+            + l_data["retry"].format(v=verb_name(lang, ru, en))
+        )
+        send_reply(message.chat.id, retry_text, hint_for(key, hu, inf), exit_keyboard(lang))
+
+
+try:   # меню команд (кнопка «/» рядом с полем ввода)
+    from telebot.types import BotCommand
+    bot.set_my_commands([
+        BotCommand("word", "Слово дня"),
+        BotCommand("newword", "Другое слово дня"),
+        BotCommand("menu", "Главное меню"),
+    ])
+except Exception as e:
+    print(f"Не удалось задать меню команд: {e}")
 
 threading.Thread(target=daily_reminders_loop, daemon=True).start()
 
