@@ -1817,6 +1817,71 @@ def word_of_day(day):
     return WORDS[_WORD_ORDER[day.toordinal() % len(WORDS)]]
 
 
+WORD_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(USERS_FILE)), "word_state.json")
+CHANGE_BTN = {"ru": "🔄 Знаю, другое слово", "uk": "🔄 Знаю, інше слово", "en": "🔄 I know it, next word"}
+
+
+def _load_word_state():
+    try:
+        with open(WORD_STATE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+_word_state = _load_word_state()   # {user_id: {"date": "...", "idx": int, "known": [idx, ...]}}
+
+
+def _save_word_state():
+    try:
+        with open(WORD_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(_word_state, f)
+    except Exception as e:
+        print(f"Не удалось сохранить слова: {e}")
+
+
+def user_known(user_id):
+    return set(_word_state.get(str(user_id), {}).get("known", []))
+
+
+def user_word(user_id, day):
+    """Слово дня для пользователя: общее, если он его не менял сегодня."""
+    st = _word_state.get(str(user_id))
+    if st and st.get("date") == day.isoformat():
+        return WORDS[st["idx"]]
+    w = word_of_day(day)
+    if WORDS.index(w) in user_known(user_id):
+        return pick_new_word(user_id, w)
+    return w
+
+
+def pick_new_word(user_id, current):
+    known = user_known(user_id)
+    known.add(WORDS.index(current))
+    choices = [i for i in range(len(WORDS)) if i not in known]
+    if not choices:          # всё знает: начинаем круг заново
+        known = {WORDS.index(current)}
+        choices = [i for i in range(len(WORDS)) if i not in known]
+    return WORDS[random.choice(choices)]
+
+
+def change_user_word(user_id, day):
+    """Пометить слово как известное и выбрать другое на сегодня."""
+    cur = user_word(user_id, day)
+    new = pick_new_word(user_id, cur)
+    known = user_known(user_id)
+    known.add(WORDS.index(cur))
+    _word_state[str(user_id)] = {"date": day.isoformat(), "idx": WORDS.index(new), "known": sorted(known)}
+    _save_word_state()
+    return new
+
+
+def change_markup(lang):
+    kb = InlineKeyboardMarkup()
+    kb.row(InlineKeyboardButton(CHANGE_BTN.get(lang, CHANGE_BTN["en"]), callback_data="wn"))
+    return kb
+
+
 def word_index(w):
     return WORDS.index(w)
 
@@ -1859,7 +1924,16 @@ def budapest_now():
 def cmd_word(message):
     all_users.add(message.from_user.id)
     lang = active_trainings.get(message.from_user.id, {}).get("lang") or "ru"
-    bot.send_message(message.chat.id, word_text(lang, word_of_day(budapest_now().date())))
+    w = user_word(message.from_user.id, budapest_now().date())
+    bot.send_message(message.chat.id, word_text(lang, w), reply_markup=change_markup(lang))
+
+
+@bot.message_handler(commands=["newword"])
+def cmd_newword(message):
+    all_users.add(message.from_user.id)
+    lang = active_trainings.get(message.from_user.id, {}).get("lang") or "ru"
+    w = change_user_word(message.from_user.id, budapest_now().date())
+    bot.send_message(message.chat.id, word_text(lang, w), reply_markup=change_markup(lang))
 
 
 # ---------------------------------------------------------- напоминания
@@ -1914,13 +1988,30 @@ def send_word(user_id, w, fmt="plain", day=None):
     elif fmt == "old" and day is not None:
         n = random.choice([1, 3, 7])
         old = word_of_day(day - timedelta(days=n))
-        if old == w:
+        if old == w or WORDS.index(old) in user_known(user_id):
             bot.send_message(user_id, word_text(lang, w))
         else:
             label = OLD_LABELS[n].get(lang, OLD_LABELS[n]["en"])
             bot.send_message(user_id, f"{label}: {word_text(lang, old)}")
     else:
-        bot.send_message(user_id, word_text(lang, w))
+        bot.send_message(user_id, word_text(lang, w), reply_markup=change_markup(lang))
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "wn")
+def on_word_change(call):
+    try:
+        uid = call.from_user.id
+        lang = active_trainings.get(uid, {}).get("lang") or "ru"
+        new = change_user_word(uid, budapest_now().date())
+        bot.edit_message_text(word_text(lang, new), call.message.chat.id, call.message.message_id,
+                              reply_markup=change_markup(lang))
+        bot.answer_callback_query(call.id, "🔄")
+    except Exception as e:
+        print(f"Ошибка смены слова: {e}")
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
 
 
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("wq:"))
@@ -1966,11 +2057,10 @@ def scheduler_tick(now):
     for i, m in enumerate(day_slots(today)):
         if 0 <= now_min - m < 20 and (today, "w", i) not in _sent:
             _sent.add((today, "w", i))
-            w = word_of_day(today)
             fmt = slot_format(today, i)
             for user_id in list(all_users):
                 try:
-                    send_word(user_id, w, fmt, today)
+                    send_word(user_id, user_word(user_id, today), fmt, today)
                 except Exception as e:
                     print(f"Ошибка слова дня {user_id}: {e}")
                 time.sleep(0.05)
