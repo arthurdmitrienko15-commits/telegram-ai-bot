@@ -35,7 +35,12 @@ BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
 RECENT_LIMIT = 6
 
 active_trainings = {}
-USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
+DATA_DIR = os.getenv("DATA_DIR") or os.path.dirname(os.path.abspath(__file__))
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+except Exception as e:
+    print(f"Не удалось создать папку данных {DATA_DIR}: {e}")
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
 
 
 def save_users():
@@ -1180,13 +1185,26 @@ def verbs_label(lang):
     return f"{menu_txt(lang)['v']} {K_VERBS}"
 
 
+MODES_NAMES = {
+    "ru": "Режимы", "en": "Modes", "uk": "Режими", "es": "Modos", "fr": "Modes",
+    "de": "Modi", "it": "Modalità", "pl": "Tryby", "zh": "模式", "pt": "Modos",
+}
+# в сравнении убираем невидимый знак эмодзи (U+FE0F): Telegram может его потерять
+MODES_BTNS = {f"⚙️ {n}".replace("\ufe0f", "") for n in MODES_NAMES.values()}
+
+
+def modes_label(lang):
+    return f"⚙️ {MODES_NAMES.get(lang) or MODES_NAMES['en']}"
+
+
 def main_keyboard(lang):
-    """Главное меню: только «Глаголы» и «Cards»."""
+    """Главное меню: «Глаголы», «Cards» и «Режимы» (что присылать в течение дня)."""
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     row = [KeyboardButton(text=verbs_label(lang))]
     if available_cards():
         row.append(KeyboardButton(text=CARDS_BTN))
     kb.row(*row)
+    kb.row(KeyboardButton(text=modes_label(lang)))
     return kb
 
 
@@ -1679,14 +1697,14 @@ WORDS = [
     ("széles", "широкий", "широкий", "wide"),
     ("keskeny", "узкий", "вузький", "narrow"),
 ]
-# фиксированная перестановка: слова идут по кругу и не повторяются, пока не кончится список
-_WORD_ORDER = random.Random(2026).sample(range(len(WORDS)), len(WORDS))
-
-# Слово дня крутится весь день в разных форматах. Звук уведомлений включён.
-WORDS_PER_DAY = 14            # сколько сообщений со словом в день (меняй как хочешь)
+# Режимы «слова дня» (колоды). У каждого режима свой список, свои сообщения в течение дня
+# и своя память «знаю» у каждого пользователя. Режимов можно включить несколько сразу.
+WORDS_PER_DAY = 14            # прилагательные: сколько сообщений в день (меняй как хочешь)
+NUMBERS_PER_DAY = 10          # числа: сколько сообщений в день
 WORD_START = 8 * 60           # с 08:00 (минуты от полуночи)
 WORD_END = 22 * 60 + 30       # до 22:30
-WORD_MIN_GAP = 25             # минимум минут между сообщениями
+WORD_MIN_GAP = 25             # минимум минут между сообщениями одного режима
+MODES_MIN_GAP = 8             # минимум минут между сообщениями РАЗНЫХ режимов
 # вес формата: обычное «hu — tr» самое частое
 WORD_FORMATS = [("plain", 6), ("spoiler", 2), ("quiz", 2), ("example", 2), ("big", 1.5), ("old", 1.5)]
 OLD_LABELS = {
@@ -1695,79 +1713,191 @@ OLD_LABELS = {
     7: {"ru": "неделю назад", "uk": "тиждень тому", "en": "a week ago"},
 }
 QUIZ_RIGHT = {"ru": "верно", "uk": "вірно", "en": "correct"}
+DEFAULT_MODES = ["adj"]       # у кого режимы не настроены, всё как раньше: только прилагательные
 
 
-def word_of_day(day):
-    return WORDS[_WORD_ORDER[day.toordinal() % len(WORDS)]]
+def _num(n, hu):
+    """Число в том же виде, что и слово: (венгерский, ru, uk, en). Перевод везде один: цифры."""
+    return (hu, str(n), str(n), str(n))
 
 
-WORD_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(USERS_FILE)), "word_state.json")
-CHANGE_BTN = {"ru": "🔄 Знаю, другое слово", "uk": "🔄 Знаю, інше слово", "en": "🔄 I know it, next word"}
+# Числа идут по порядку: сначала десятки, потом сотни и цены в форинтах.
+NUMBERS = [
+    _num(10, "tíz"), _num(20, "húsz"), _num(30, "harminc"), _num(40, "negyven"), _num(50, "ötven"),
+    _num(60, "hatvan"), _num(70, "hetven"), _num(80, "nyolcvan"), _num(90, "kilencven"),
+    _num(100, "száz"), _num(200, "kétszáz"), _num(300, "háromszáz"), _num(500, "ötszáz"),
+    _num(1000, "ezer"), _num(2000, "kétezer"), _num(5000, "ötezer"),
+]
 
 
-def _load_word_state():
+class Deck:
+    """Один режим «слова дня»: список, расписание на день и память «знаю» у каждого пользователя."""
+
+    def __init__(self, key, tag, items, state_file, per_day,
+                 slot_seed=0, fmt_seed=0, shuffle=True, order_seed=2026):
+        self.key = key            # "adj" / "num": так режим записан в настройках пользователя
+        self.tag = tag            # "w" / "n": начало callback_data и ключ отправленных слотов
+        self.items = items
+        self.state_file = state_file
+        self.per_day = per_day
+        self.slot_seed = slot_seed
+        self.fmt_seed = fmt_seed
+        n = len(items)
+        # фиксированная перестановка: слова идут по кругу и не повторяются, пока не кончится список
+        self.order = random.Random(order_seed).sample(range(n), n) if shuffle else list(range(n))
+        self.state = self._load()  # {user_id: {"date": "...", "idx": int, "known": [idx, ...]}}
+
+    def _load(self):
+        try:
+            with open(self.state_file, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save(self):
+        try:
+            with open(self.state_file, "w", encoding="utf-8") as f:
+                json.dump(self.state, f)
+        except Exception as e:
+            print(f"Не удалось сохранить {self.state_file}: {e}")
+
+    def index(self, item):
+        return self.items.index(item)
+
+    def of_day(self, day):
+        return self.items[self.order[day.toordinal() % len(self.items)]]
+
+    def known(self, user_id):
+        return set(self.state.get(str(user_id), {}).get("known", []))
+
+    def _pick_new(self, user_id, current):
+        known = self.known(user_id)
+        known.add(self.index(current))
+        choices = [i for i in range(len(self.items)) if i not in known]
+        if not choices:          # всё знает: начинаем круг заново
+            known = {self.index(current)}
+            choices = [i for i in range(len(self.items)) if i not in known]
+        return self.items[random.choice(choices)]
+
+    def user_item(self, user_id, day):
+        """Слово (число) дня для пользователя: общее, если он его не менял и уже не знает."""
+        st = self.state.get(str(user_id))
+        if st and st.get("date") == day.isoformat():
+            return self.items[st["idx"]]
+        w = self.of_day(day)
+        if self.index(w) in self.known(user_id):
+            w = self._pick_new(user_id, w)
+            # запоминаем выбор на сегодня: иначе каждое сообщение дня было бы с новым словом
+            self.state[str(user_id)] = {
+                "date": day.isoformat(), "idx": self.index(w), "known": sorted(self.known(user_id)),
+            }
+            self._save()
+        return w
+
+    def change(self, user_id, day):
+        """Пометить слово как известное и выбрать другое на сегодня."""
+        cur = self.user_item(user_id, day)
+        new = self._pick_new(user_id, cur)
+        known = self.known(user_id)
+        known.add(self.index(cur))
+        self.state[str(user_id)] = {"date": day.isoformat(), "idx": self.index(new), "known": sorted(known)}
+        self._save()
+        return new
+
+    def base_slots(self, day):
+        """Время сообщений на день: случайное, но одинаковое после перезапуска. Минуты от полуночи."""
+        rnd = random.Random(day.toordinal() * 7919 + self.slot_seed)
+        span = WORD_END - WORD_START
+        n = self.per_day
+        free = span - (n - 1) * WORD_MIN_GAP
+        cuts = sorted(rnd.randint(0, free) for _ in range(n))
+        return [WORD_START + c + i * WORD_MIN_GAP for i, c in enumerate(cuts)]
+
+    def fmt(self, day, i):
+        rnd = random.Random(day.toordinal() * 104729 + i + self.fmt_seed)
+        names = [f for f, _ in WORD_FORMATS]
+        weights = [w for _, w in WORD_FORMATS]
+        return rnd.choices(names, weights)[0]
+
+
+ADJ = Deck("adj", "w", WORDS, os.path.join(DATA_DIR, "word_state.json"), WORDS_PER_DAY)
+NUM = Deck("num", "n", NUMBERS, os.path.join(DATA_DIR, "number_state.json"), NUMBERS_PER_DAY,
+           slot_seed=31337, fmt_seed=5000, shuffle=False)
+DECKS = {"adj": ADJ, "num": NUM}                  # порядок = порядок кнопок в настройках
+DECK_BY_TAG = {d.tag: d for d in DECKS.values()}
+
+
+def day_slots(day):
+    """Расписание на день по режимам: {ключ режима: [минуты от полуночи]}.
+    Сообщения разных режимов не стоят вплотную: второй режим сдвигается от первого."""
+    result, taken = {}, []
+    for key, deck in DECKS.items():
+        slots = []
+        for m in deck.base_slots(day):
+            for _ in range(MODES_MIN_GAP * 2):
+                if all(abs(m - t) >= MODES_MIN_GAP for t in taken):
+                    break
+                m += 1
+            slots.append(m)
+        result[key] = slots
+        taken += slots
+    return result
+
+
+# ---------- какие режимы включены у пользователя (можно несколько сразу)
+MODES_FILE = os.path.join(DATA_DIR, "modes.json")
+
+
+def _load_modes():
     try:
-        with open(WORD_STATE_FILE, encoding="utf-8") as f:
+        with open(MODES_FILE, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
 
 
-_word_state = _load_word_state()   # {user_id: {"date": "...", "idx": int, "known": [idx, ...]}}
+_user_modes = _load_modes()   # {user_id: ["adj", "num"]}
 
 
-def _save_word_state():
+def _save_modes():
     try:
-        with open(WORD_STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(_word_state, f)
+        with open(MODES_FILE, "w", encoding="utf-8") as f:
+            json.dump(_user_modes, f)
     except Exception as e:
-        print(f"Не удалось сохранить слова: {e}")
+        print(f"Не удалось сохранить modes.json: {e}")
 
 
-def user_known(user_id):
-    return set(_word_state.get(str(user_id), {}).get("known", []))
+def user_modes(user_id):
+    return set(_user_modes.get(str(user_id), DEFAULT_MODES)) & set(DECKS)
 
 
-def user_word(user_id, day):
-    """Слово дня для пользователя: общее, если он его не менял сегодня."""
-    st = _word_state.get(str(user_id))
-    if st and st.get("date") == day.isoformat():
-        return WORDS[st["idx"]]
-    w = word_of_day(day)
-    if WORDS.index(w) in user_known(user_id):
-        return pick_new_word(user_id, w)
-    return w
+def toggle_mode(user_id, key):
+    """Включает или выключает режим. Возвращает True, если теперь он включён."""
+    modes = user_modes(user_id)
+    if key in modes:
+        modes.discard(key)
+    else:
+        modes.add(key)
+    _user_modes[str(user_id)] = [k for k in DECKS if k in modes]
+    _save_modes()
+    return key in modes
 
 
-def pick_new_word(user_id, current):
-    known = user_known(user_id)
-    known.add(WORDS.index(current))
-    choices = [i for i in range(len(WORDS)) if i not in known]
-    if not choices:          # всё знает: начинаем круг заново
-        known = {WORDS.index(current)}
-        choices = [i for i in range(len(WORDS)) if i not in known]
-    return WORDS[random.choice(choices)]
+def user_lang(user_id):
+    return active_trainings.get(user_id, {}).get("lang") or "ru"
 
 
-def change_user_word(user_id, day):
-    """Пометить слово как известное и выбрать другое на сегодня."""
-    cur = user_word(user_id, day)
-    new = pick_new_word(user_id, cur)
-    known = user_known(user_id)
-    known.add(WORDS.index(cur))
-    _word_state[str(user_id)] = {"date": day.isoformat(), "idx": WORDS.index(new), "known": sorted(known)}
-    _save_word_state()
-    return new
+CHANGE_BTN = {
+    "w": {"ru": "🔄 Знаю, другое слово", "uk": "🔄 Знаю, інше слово", "en": "🔄 I know it, next word"},
+    "n": {"ru": "🔄 Знаю, другое число", "uk": "🔄 Знаю, інше число", "en": "🔄 I know it, next number"},
+}
 
 
-def change_markup(lang):
+def change_markup(lang, deck=ADJ):
     kb = InlineKeyboardMarkup()
-    kb.row(InlineKeyboardButton(CHANGE_BTN.get(lang, CHANGE_BTN["en"]), callback_data="wn"))
+    btn = CHANGE_BTN[deck.tag]
+    kb.row(InlineKeyboardButton(btn.get(lang, btn["en"]), callback_data=f"{deck.tag}n"))
     return kb
-
-
-def word_index(w):
-    return WORDS.index(w)
 
 
 def tr_of(lang, w):
@@ -1783,21 +1913,44 @@ def word_text(lang, w):
     return f"{w[0]} — {tr_of(lang, w)}"
 
 
-def day_slots(day):
-    """Время сообщений на день: случайное, но одинаковое после перезапуска. Список минут от полуночи."""
-    rnd = random.Random(day.toordinal() * 7919)
-    span = WORD_END - WORD_START
-    n = WORDS_PER_DAY
-    free = span - (n - 1) * WORD_MIN_GAP
-    cuts = sorted(rnd.randint(0, free) for _ in range(n))
-    return [WORD_START + c + i * WORD_MIN_GAP for i, c in enumerate(cuts)]
+def number_example(lang, w):
+    """Фраза с числом: возраст для чисел до 100, цена в форинтах для остальных."""
+    n = int(w[1])
+    hu = w[0]
+    if n <= 100:
+        tr = {"ru": f"Мне {n} лет.", "uk": f"Мені {n} років.", "en": f"I'm {n} years old."}
+        return f"{hu[:1].upper()}{hu[1:]} éves vagyok.", tr.get(lang, tr["en"])
+    tr = {"ru": f"Это {n} форинтов.", "uk": f"Це {n} форинтів.", "en": f"This is {n} forints."}
+    return f"Ez {hu} forint.", tr.get(lang, tr["en"])
 
 
-def slot_format(day, i):
-    rnd = random.Random(day.toordinal() * 104729 + i)
-    names = [f for f, _ in WORD_FORMATS]
-    weights = [w for _, w in WORD_FORMATS]
-    return rnd.choices(names, weights)[0]
+MODE_LABELS = {
+    "adj": {"ru": "Прилагательные", "uk": "Прикметники", "en": "Adjectives"},
+    "num": {"ru": "Числа (20, 30, 50…)", "uk": "Числа (20, 30, 50…)", "en": "Numbers (20, 30, 50…)"},
+}
+MODES_HEAD = {
+    "ru": "Что присылать в течение дня? Можно включить оба режима сразу.\n✅ включено, ⬜ выключено",
+    "uk": "Що надсилати протягом дня? Можна увімкнути обидва режими одразу.\n✅ увімкнено, ⬜ вимкнено",
+    "en": "What should I send during the day? You can turn on both modes at once.\n✅ on, ⬜ off",
+}
+
+
+def mode_label(key, lang):
+    labels = MODE_LABELS[key]
+    return labels.get(lang, labels["en"])
+
+
+def modes_markup(user_id, lang):
+    on = user_modes(user_id)
+    kb = InlineKeyboardMarkup()
+    for key in DECKS:
+        mark = "✅" if key in on else "⬜"
+        kb.row(InlineKeyboardButton(f"{mark} {mode_label(key, lang)}", callback_data=f"md:{key}"))
+    return kb
+
+
+def show_modes(chat_id, user_id, lang):
+    bot.send_message(chat_id, MODES_HEAD.get(lang, MODES_HEAD["en"]), reply_markup=modes_markup(user_id, lang))
 
 
 def budapest_now():
@@ -1806,18 +1959,57 @@ def budapest_now():
 
 @bot.message_handler(commands=["word"])
 def cmd_word(message):
-    all_users.add(message.from_user.id)
-    lang = active_trainings.get(message.from_user.id, {}).get("lang") or "ru"
-    w = user_word(message.from_user.id, budapest_now().date())
-    bot.send_message(message.chat.id, word_text(lang, w), reply_markup=change_markup(lang))
+    uid = message.from_user.id
+    all_users.add(uid)
+    lang = user_lang(uid)
+    today = budapest_now().date()
+    modes = user_modes(uid) or {"adj"}   # по прямой просьбе показываем слово, даже если всё выключено
+    for key, deck in DECKS.items():
+        if key in modes:
+            w = deck.user_item(uid, today)
+            bot.send_message(message.chat.id, word_text(lang, w), reply_markup=change_markup(lang, deck))
 
 
 @bot.message_handler(commands=["newword"])
 def cmd_newword(message):
-    all_users.add(message.from_user.id)
-    lang = active_trainings.get(message.from_user.id, {}).get("lang") or "ru"
-    w = change_user_word(message.from_user.id, budapest_now().date())
-    bot.send_message(message.chat.id, word_text(lang, w), reply_markup=change_markup(lang))
+    uid = message.from_user.id
+    all_users.add(uid)
+    lang = user_lang(uid)
+    w = ADJ.change(uid, budapest_now().date())
+    bot.send_message(message.chat.id, word_text(lang, w), reply_markup=change_markup(lang, ADJ))
+
+
+@bot.message_handler(commands=["modes"])
+def cmd_modes(message):
+    uid = message.from_user.id
+    all_users.add(uid)
+    show_modes(message.chat.id, uid, user_lang(uid))
+
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("md:"))
+def on_modes_callback(call):
+    try:
+        uid = call.from_user.id
+        key = call.data.split(":", 1)[1]
+        if key not in DECKS:
+            bot.answer_callback_query(call.id)
+            return
+        all_users.add(uid)
+        lang = user_lang(uid)
+        now_on = toggle_mode(uid, key)
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id,
+                                      reply_markup=modes_markup(uid, lang))
+        bot.answer_callback_query(call.id, f"{'✅' if now_on else '⬜'} {mode_label(key, lang)}")
+        if now_on:   # сразу показываем первое слово (число), чтобы было видно, что режим работает
+            deck = DECKS[key]
+            w = deck.user_item(uid, budapest_now().date())
+            bot.send_message(call.message.chat.id, word_text(lang, w), reply_markup=change_markup(lang, deck))
+    except Exception as e:
+        print(f"Ошибка переключения режима: {e}")
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------- напоминания
@@ -1848,50 +2040,59 @@ def send_reminder(user_id, time_key):
         )
 
 
-def send_word(user_id, w, fmt="plain", day=None):
-    """Сообщение со словом дня. Без disable_notification: звук включён. Клавиатура и тренировка не трогаются."""
-    lang = active_trainings.get(user_id, {}).get("lang") or "ru"
+def send_word(user_id, w, fmt="plain", day=None, deck=ADJ):
+    """Сообщение со словом (числом) дня. Без disable_notification: звук включён.
+    Клавиатура и тренировка не трогаются."""
+    lang = user_lang(user_id)
     hu = w[0]
+    markup = change_markup(lang, deck)
     if fmt == "spoiler":
         bot.send_message(
             user_id, f"{escape_markdown_v2(hu)} — ||{escape_markdown_v2(tr_of(lang, w))}||",
-            parse_mode="MarkdownV2", reply_markup=change_markup(lang))
+            parse_mode="MarkdownV2", reply_markup=markup)
     elif fmt == "quiz":
-        others = random.sample([x for x in WORDS if x != w], 2)
+        others = random.sample([x for x in deck.items if x != w], 2)
         opts = others + [w]
         random.shuffle(opts)
         kb = InlineKeyboardMarkup()
-        kb.row(*[InlineKeyboardButton(o[0], callback_data=f"wq:{word_index(w)}:{word_index(o)}") for o in opts])
-        kb.row(InlineKeyboardButton(CHANGE_BTN.get(lang, CHANGE_BTN["en"]), callback_data="wn"))
+        kb.row(*[InlineKeyboardButton(o[0], callback_data=f"{deck.tag}q:{deck.index(w)}:{deck.index(o)}")
+                 for o in opts])
+        btn = CHANGE_BTN[deck.tag]
+        kb.row(InlineKeyboardButton(btn.get(lang, btn["en"]), callback_data=f"{deck.tag}n"))
         bot.send_message(user_id, f"{tr_of(lang, w)} — ?", reply_markup=kb)
     elif fmt == "example":
-        sent_hu = f"Nagyon {hu}."
-        pre = {"ru": "Очень", "uk": "Дуже", "en": "Very"}.get(lang, "Very")
-        bot.send_message(user_id, f"{hu} — {sent_hu}\n({pre} {short_tr(lang, w)})",
-                         reply_markup=change_markup(lang))
+        if deck.key == "num":
+            sent_hu, sent_tr = number_example(lang, w)
+            text = f"{hu} — {sent_hu}\n({sent_tr})"
+        else:
+            sent_hu = f"Nagyon {hu}."
+            pre = {"ru": "Очень", "uk": "Дуже", "en": "Very"}.get(lang, "Very")
+            text = f"{hu} — {sent_hu}\n({pre} {short_tr(lang, w)})"
+        bot.send_message(user_id, text, reply_markup=markup)
     elif fmt == "big":
         bot.send_message(user_id, f"*{escape_markdown_v2(hu.upper())}*", parse_mode="MarkdownV2",
-                         reply_markup=change_markup(lang))
+                         reply_markup=markup)
     elif fmt == "old" and day is not None:
         n = random.choice([1, 3, 7])
-        old = word_of_day(day - timedelta(days=n))
-        if old == w or WORDS.index(old) in user_known(user_id):
-            bot.send_message(user_id, word_text(lang, w), reply_markup=change_markup(lang))
+        old = deck.of_day(day - timedelta(days=n))
+        if old == w or deck.index(old) in deck.known(user_id):
+            bot.send_message(user_id, word_text(lang, w), reply_markup=markup)
         else:
             label = OLD_LABELS[n].get(lang, OLD_LABELS[n]["en"])
-            bot.send_message(user_id, f"{label}: {word_text(lang, old)}", reply_markup=change_markup(lang))
+            bot.send_message(user_id, f"{label}: {word_text(lang, old)}", reply_markup=markup)
     else:
-        bot.send_message(user_id, word_text(lang, w), reply_markup=change_markup(lang))
+        bot.send_message(user_id, word_text(lang, w), reply_markup=markup)
 
 
-@bot.callback_query_handler(func=lambda c: c.data == "wn")
+@bot.callback_query_handler(func=lambda c: c.data in ("wn", "nn"))
 def on_word_change(call):
     try:
         uid = call.from_user.id
-        lang = active_trainings.get(uid, {}).get("lang") or "ru"
-        new = change_user_word(uid, budapest_now().date())
+        deck = DECK_BY_TAG[call.data[0]]
+        lang = user_lang(uid)
+        new = deck.change(uid, budapest_now().date())
         bot.edit_message_text(word_text(lang, new), call.message.chat.id, call.message.message_id,
-                              reply_markup=change_markup(lang))
+                              reply_markup=change_markup(lang, deck))
         bot.answer_callback_query(call.id, "🔄")
     except Exception as e:
         print(f"Ошибка смены слова: {e}")
@@ -1901,12 +2102,13 @@ def on_word_change(call):
             pass
 
 
-@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("wq:"))
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith(("wq:", "nq:")))
 def on_word_quiz(call):
     try:
+        deck = DECK_BY_TAG[call.data[0]]
         _, wi, oi = call.data.split(":")
-        w, o = WORDS[int(wi)], WORDS[int(oi)]
-        lang = active_trainings.get(call.from_user.id, {}).get("lang") or "ru"
+        w, o = deck.items[int(wi)], deck.items[int(oi)]
+        lang = user_lang(call.from_user.id)
         if w == o:
             bot.edit_message_text(f"✅ {word_text(lang, w)}", call.message.chat.id, call.message.message_id)
             bot.answer_callback_query(call.id, "✅")
@@ -1942,18 +2144,23 @@ def scheduler_tick(now):
                 print(f"Ошибка напоминания {user_id}: {e}")
             time.sleep(0.05)
 
-    # слово дня: одно слово весь день, форматы чередуются
+    # слово дня: каждый режим крутится весь день (одно слово или число), форматы чередуются.
+    # Сообщения получают только те, у кого этот режим включён: можно включить оба сразу.
     now_min = now.hour * 60 + now.minute
-    for i, m in enumerate(day_slots(today)):
-        if 0 <= now_min - m < 20 and (today, "w", i) not in _sent:
-            _sent.add((today, "w", i))
-            fmt = slot_format(today, i)
-            for user_id in list(all_users):
-                try:
-                    send_word(user_id, user_word(user_id, today), fmt, today)
-                except Exception as e:
-                    print(f"Ошибка слова дня {user_id}: {e}")
-                time.sleep(0.05)
+    for key, slots in day_slots(today).items():
+        deck = DECKS[key]
+        for i, m in enumerate(slots):
+            if 0 <= now_min - m < 20 and (today, deck.tag, i) not in _sent:
+                _sent.add((today, deck.tag, i))
+                fmt = deck.fmt(today, i)
+                for user_id in list(all_users):
+                    if key not in user_modes(user_id):
+                        continue
+                    try:
+                        send_word(user_id, deck.user_item(user_id, today), fmt, today, deck)
+                    except Exception as e:
+                        print(f"Ошибка слова дня ({key}) {user_id}: {e}")
+                    time.sleep(0.05)
 
 
 def daily_reminders_loop():
@@ -2002,6 +2209,11 @@ def handle_all_messages(message):
     # --- кнопка выхода
     if text in EXIT_BTNS:
         exit_to_menu(message.chat.id, user_id)
+        return
+
+    # --- режимы слова дня
+    if text.replace("\ufe0f", "") in MODES_BTNS and "verb" not in data:
+        show_modes(message.chat.id, user_id, lang)
         return
 
     # --- раздел «Глаголы»
@@ -2087,6 +2299,7 @@ try:   # меню команд (кнопка «/» рядом с полем вв
     bot.set_my_commands([
         BotCommand("word", "Слово дня"),
         BotCommand("newword", "Другое слово дня"),
+        BotCommand("modes", "Режимы: прилагательные и числа"),
         BotCommand("menu", "Главное меню"),
     ])
 except Exception as e:
