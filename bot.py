@@ -1,4 +1,7 @@
+import asyncio
+import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -13,6 +16,10 @@ try:
     from groq import Groq
 except Exception:  # библиотека не установлена — бот всё равно работает
     Groq = None
+try:
+    import edge_tts
+except Exception:  # без озвучки бот тоже работает, просто без кнопки 🔊
+    edge_tts = None
 from telebot.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -892,12 +899,16 @@ def get_language_keyboard():
     return markup
 
 
-def get_verbs_keyboard(lang="ru", exclude=()):
-    """3 случайных глагола, кроме недавно выученных."""
-    pool = [v for v in VERBS_DATABASE if v[0] not in exclude]
-    if len(pool) < 3:
-        pool = VERBS_DATABASE
-    selected = random.sample(pool, 3)
+def get_verbs_keyboard(lang="ru", exclude=(), uid=None):
+    """До 3 глаголов на выбор. С uid: только открытые на карте (глаголы текущего уровня)."""
+    if uid is not None:
+        ids = VTRACK.pending_ids(uid) or VTRACK.seen_ids(uid) or list(range(len(VERBS_DATABASE)))
+        pool = [VERBS_DATABASE[i] for i in ids if VERBS_DATABASE[i][0] not in exclude] or [VERBS_DATABASE[i] for i in ids]
+    else:
+        pool = [v for v in VERBS_DATABASE if v[0] not in exclude]
+        if len(pool) < 3:
+            pool = VERBS_DATABASE
+    selected = random.sample(pool, min(3, len(pool)))
     markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     for hu, ru, en, inf in selected:
         markup.add(KeyboardButton(text=f"{hu} ({verb_name(lang, ru, en)})"))
@@ -905,13 +916,15 @@ def get_verbs_keyboard(lang="ru", exclude=()):
     return markup
 
 
-def find_verb(text):
+def find_verb(text, uid=None):
     """Ищем глагол по нажатой кнопке «hall (слышать)» или по точному слову."""
     t = text.lower().strip()
     head = t.split(" (")[0].strip()
     for verb in VERBS_DATABASE:
         hu, ru, en, inf = verb
         if head in (hu, inf) or t in (ru.lower(), en.lower()):
+            if uid is not None and not VTRACK.allowed(uid, VERBS_DATABASE.index(verb)):
+                return "locked"
             return verb
     return None
 
@@ -1173,7 +1186,10 @@ def exit_label(lang):
 def exit_keyboard(lang):
     """Кнопка выхода внизу экрана на время тренировки глагола."""
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(KeyboardButton(text=exit_label(lang)))
+    if edge_tts is not None:
+        kb.row(KeyboardButton(text=AUDIO_BTN), KeyboardButton(text=exit_label(lang)))
+    else:
+        kb.add(KeyboardButton(text=exit_label(lang)))
     return kb
 
 
@@ -1205,6 +1221,7 @@ def main_keyboard(lang):
         row.append(KeyboardButton(text=CARDS_BTN))
     kb.row(*row)
     kb.row(KeyboardButton(text=modes_label(lang)))
+    kb.row(KeyboardButton(text=map_label(lang)), KeyboardButton(text=profile_label(lang)))
     return kb
 
 
@@ -1730,79 +1747,181 @@ NUMBERS = [
 ]
 
 
-class Deck:
-    """Один режим «слова дня»: список, расписание на день и память «знаю» у каждого пользователя."""
+# ---------------------------------------------------------------- прогресс: карта, уровни, тесты
+# Каждая дорожка (прилагательные, числа, глаголы) разбита на уровни по несколько слов.
+# Слова уровня идут по одному в день, в конце контрольный тест: сдал, открывается следующий
+# уровень; не сдал, повторяем то, что не получилось, а новые слова закрыты.
+PROGRESS_FILE = os.path.join(DATA_DIR, "progress.json")
+LEVEL_SIZE = {"adj": 5, "num": 4, "verbs": 3}   # сколько слов (чисел, глаголов) в одном уровне карты
+PASS_RATIO = 0.75                               # доля верных ответов, нужная для сдачи теста
+TEST_COOLDOWN = 30 * 60                         # после неудачи пересдача через 30 минут (секунды)
+TEST_OPTIONS = 3                                # вариантов ответа на вопрос теста
+_prog_lock = threading.RLock()
 
-    def __init__(self, key, tag, items, state_file, per_day,
-                 slot_seed=0, fmt_seed=0, shuffle=True, order_seed=2026):
-        self.key = key            # "adj" / "num": так режим записан в настройках пользователя
-        self.tag = tag            # "w" / "n": начало callback_data и ключ отправленных слотов
-        self.items = items
-        self.state_file = state_file
-        self.per_day = per_day
-        self.slot_seed = slot_seed
-        self.fmt_seed = fmt_seed
-        n = len(items)
-        # фиксированная перестановка: слова идут по кругу и не повторяются, пока не кончится список
-        self.order = random.Random(order_seed).sample(range(n), n) if shuffle else list(range(n))
-        self.state = self._load()  # {user_id: {"date": "...", "idx": int, "known": [idx, ...]}}
 
-    def _load(self):
+def _load_progress():
+    try:
+        with open(PROGRESS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+_progress = _load_progress()   # {user_id: {"tracks": {...}, "ach": [...], "test": {...} или None}}
+
+
+def save_progress():
+    with _prog_lock:
         try:
-            with open(self.state_file, encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-
-    def _save(self):
-        try:
-            with open(self.state_file, "w", encoding="utf-8") as f:
-                json.dump(self.state, f)
+            tmp = PROGRESS_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(_progress, f, ensure_ascii=False)
+            os.replace(tmp, PROGRESS_FILE)
         except Exception as e:
-            print(f"Не удалось сохранить {self.state_file}: {e}")
+            print(f"Не удалось сохранить progress.json: {e}")
+
+
+def prog(user_id):
+    with _prog_lock:
+        u = _progress.setdefault(str(user_id), {})
+        u.setdefault("tracks", {})
+        u.setdefault("ach", [])
+        u.setdefault("test", None)
+        return u
+
+
+def make_levels(n_items, size):
+    return [list(range(i, min(i + size, n_items))) for i in range(0, n_items, size)]
+
+
+class Track:
+    """Дорожка на карте: уровни по несколько слов. Следующий уровень открывается только после теста."""
+
+    def __init__(self, key, items):
+        self.key = key
+        self.items = items
+        self.levels = make_levels(len(items), LEVEL_SIZE[key])
 
     def index(self, item):
         return self.items.index(item)
 
-    def of_day(self, day):
-        return self.items[self.order[day.toordinal() % len(self.items)]]
+    def st(self, uid):
+        with _prog_lock:
+            t = prog(uid)["tracks"].setdefault(self.key, {})
+            for k, v in (("passed", 0), ("missed", []), ("last_try", 0), ("tries", 0)):
+                t.setdefault(k, v)
+            return t
 
-    def known(self, user_id):
-        return set(self.state.get(str(user_id), {}).get("known", []))
+    def passed(self, uid):
+        return self.st(uid)["passed"]
 
-    def _pick_new(self, user_id, current):
-        known = self.known(user_id)
-        known.add(self.index(current))
-        choices = [i for i in range(len(self.items)) if i not in known]
-        if not choices:          # всё знает: начинаем круг заново
-            known = {self.index(current)}
-            choices = [i for i in range(len(self.items)) if i not in known]
-        return self.items[random.choice(choices)]
+    def finished(self, uid):
+        return self.passed(uid) >= len(self.levels)
 
-    def user_item(self, user_id, day):
-        """Слово (число) дня для пользователя: общее, если он его не менял и уже не знает."""
-        st = self.state.get(str(user_id))
-        if st and st.get("date") == day.isoformat():
-            return self.items[st["idx"]]
-        w = self.of_day(day)
-        if self.index(w) in self.known(user_id):
-            w = self._pick_new(user_id, w)
-            # запоминаем выбор на сегодня: иначе каждое сообщение дня было бы с новым словом
-            self.state[str(user_id)] = {
-                "date": day.isoformat(), "idx": self.index(w), "known": sorted(self.known(user_id)),
-            }
-            self._save()
-        return w
+    def current_ids(self, uid):
+        p = self.passed(uid)
+        return self.levels[p] if p < len(self.levels) else []
 
-    def change(self, user_id, day):
-        """Пометить слово как известное и выбрать другое на сегодня."""
-        cur = self.user_item(user_id, day)
-        new = self._pick_new(user_id, cur)
-        known = self.known(user_id)
-        known.add(self.index(cur))
-        self.state[str(user_id)] = {"date": day.isoformat(), "idx": self.index(new), "known": sorted(known)}
-        self._save()
-        return new
+    def learned_ids(self, uid):
+        return [i for lvl in self.levels[: self.passed(uid)] for i in lvl]
+
+    def seen_ids(self, uid):
+        """Всё, что пользователь уже видел: выученные слова и слова текущего уровня."""
+        return self.learned_ids(uid) + list(self.current_ids(uid))
+
+    def test_ready(self, uid):
+        raise NotImplementedError
+
+    def wait_left(self, uid):
+        """Сколько секунд ждать до пересдачи (0, если можно сдавать)."""
+        s = self.st(uid)
+        if s["tries"] <= 0:
+            return 0
+        return max(0, int(s["last_try"] + TEST_COOLDOWN - time.time()))
+
+    def _reset_level(self, s):
+        pass
+
+    def _after_fail(self, s):
+        pass
+
+    def pass_level(self, uid):
+        with _prog_lock:
+            s = self.st(uid)
+            s["passed"] += 1
+            s["missed"], s["tries"], s["last_try"] = [], 0, 0
+            self._reset_level(s)
+            save_progress()
+
+    def fail_level(self, uid, wrong_ids):
+        with _prog_lock:
+            s = self.st(uid)
+            s["missed"] = sorted(set(wrong_ids))
+            s["tries"] += 1
+            s["last_try"] = time.time()
+            self._after_fail(s)
+            save_progress()
+
+
+class Deck(Track):
+    """Режим «слова дня»: слова уровня идут по одному в день, повторяются весь день в разных форматах."""
+
+    def __init__(self, key, tag, items, per_day, slot_seed=0, fmt_seed=0):
+        super().__init__(key, items)
+        self.tag = tag            # "w" / "n": начало callback_data и ключ отправленных слотов
+        self.per_day = per_day
+        self.slot_seed = slot_seed
+        self.fmt_seed = fmt_seed
+
+    def _reset_level(self, s):
+        # новый уровень начинается сегодня же, с его первого слова
+        s["pos"], s["date"] = 0, budapest_now().date().isoformat()
+
+    def _day_state(self, uid, day):
+        """Каждый новый день показываем следующее слово уровня."""
+        s = self.st(uid)
+        iso = day.isoformat()
+        s.setdefault("pos", 0)
+        if s.get("date") != iso:
+            if s.get("date") is not None and s["pos"] < len(self.current_ids(uid)):
+                s["pos"] += 1
+            s["date"] = iso
+            save_progress()
+        return s
+
+    def test_ready(self, uid):
+        ids = self.current_ids(uid)
+        return bool(ids) and self.st(uid).get("pos", 0) >= len(ids)
+
+    def user_item(self, uid, day):
+        """Слово дня. Когда слова уровня кончились, повторяем их (сначала те, что не получились)."""
+        with _prog_lock:
+            ids = self.current_ids(uid)
+            if not ids:                       # все уровни пройдены: любое слово для повторения
+                return random.choice(self.items)
+            s = self._day_state(uid, day)
+            if s["pos"] < len(ids):
+                return self.items[ids[s["pos"]]]
+            pool = [i for i in s["missed"] if i in ids] or ids
+            return self.items[random.choice(pool)]
+
+    def skip(self, uid, day):
+        """«Знаю это слово»: к следующему слову уровня. None, если слова кончились и пора на тест."""
+        with _prog_lock:
+            ids = self.current_ids(uid)
+            if not ids:
+                return random.choice(self.items)
+            s = self._day_state(uid, day)
+            if s["pos"] < len(ids):
+                s["pos"] += 1
+                save_progress()
+            if s["pos"] >= len(ids):
+                return None
+            return self.items[ids[s["pos"]]]
+
+    def review_item(self, uid):
+        ids = self.learned_ids(uid)
+        return self.items[random.choice(ids)] if ids else None
 
     def base_slots(self, day):
         """Время сообщений на день: случайное, но одинаковое после перезапуска. Минуты от полуночи."""
@@ -1820,11 +1939,495 @@ class Deck:
         return rnd.choices(names, weights)[0]
 
 
-ADJ = Deck("adj", "w", WORDS, os.path.join(DATA_DIR, "word_state.json"), WORDS_PER_DAY)
-NUM = Deck("num", "n", NUMBERS, os.path.join(DATA_DIR, "number_state.json"), NUMBERS_PER_DAY,
-           slot_seed=31337, fmt_seed=5000, shuffle=False)
+class VerbTrack(Track):
+    """Глаголы: уровень = несколько глаголов. Их проходят в тренировке, потом контрольный тест."""
+
+    def st(self, uid):
+        s = super().st(uid)
+        s.setdefault("done", [])
+        return s
+
+    def pending_ids(self, uid):
+        done = set(self.st(uid)["done"])
+        return [i for i in self.current_ids(uid) if i not in done]
+
+    def test_ready(self, uid):
+        return bool(self.current_ids(uid)) and not self.pending_ids(uid)
+
+    def mark_done(self, uid, idx):
+        with _prog_lock:
+            s = self.st(uid)
+            if idx in self.current_ids(uid) and idx not in s["done"]:
+                s["done"].append(idx)
+                save_progress()
+
+    def allowed(self, uid, idx):
+        return self.finished(uid) or idx in self.seen_ids(uid)
+
+    def _reset_level(self, s):
+        s["done"] = []
+
+    def _after_fail(self, s):
+        # глаголы, в которых ошибся, снова нужно пройти
+        s["done"] = [d for d in s["done"] if d not in s["missed"]]
+
+
+ADJ = Deck("adj", "w", WORDS, WORDS_PER_DAY)
+NUM = Deck("num", "n", NUMBERS, NUMBERS_PER_DAY, slot_seed=31337, fmt_seed=5000)
+VTRACK = VerbTrack("verbs", VERBS_DATABASE)
 DECKS = {"adj": ADJ, "num": NUM}                  # порядок = порядок кнопок в настройках
 DECK_BY_TAG = {d.tag: d for d in DECKS.values()}
+TRACKS = {"adj": ADJ, "num": NUM, "verbs": VTRACK}
+TRACK_ORDER = ["adj", "num", "verbs"]
+TOTAL_WORDS = sum(len(t.items) for t in TRACKS.values())
+
+
+# ---------- выученные слова и достижения
+MILESTONES = [(n, e) for n, e in ((10, "🌱"), (25, "🥉"), (50, "🥈"), (75, "🥇"), (100, "💎"), (TOTAL_WORDS, "👑"))
+              if n <= TOTAL_WORDS]
+
+
+def learned_counts(uid):
+    return {k: len(t.learned_ids(uid)) for k, t in TRACKS.items()}
+
+
+def learned_total(uid):
+    return sum(learned_counts(uid).values())
+
+
+def check_achievements(uid):
+    """Открывает новые достижения за выученные слова. Возвращает [(число слов, эмодзи), ...]."""
+    with _prog_lock:
+        total = learned_total(uid)
+        have = set(prog(uid)["ach"])
+        new = [(n, e) for n, e in MILESTONES if total >= n and f"w{n}" not in have]
+        if new:
+            prog(uid)["ach"] += [f"w{n}" for n, _ in new]
+            save_progress()
+        return new
+
+
+# ---------- тексты (ru, uk, en; остальные языки получают английский)
+PT = {
+    "ru": {
+        "map_title": "🗺 Карта Réka", "level": "уровень {n} из {t}", "today": "Сегодня: слово {n} из {t}",
+        "verbs_progress": "Пройдено глаголов: {n} из {t}", "test_ready": "🎯 Пора на контрольную!",
+        "track_done": "🏁 все уровни пройдены", "learned": "📚 Выучено слов: {n} из {t}",
+        "next_ach": "🏆 До следующей награды: {n}", "all_ach": "🏆 Все награды получены",
+        "profile_title": "🏆 Профиль", "ach_title": "Достижения:", "words_noun": "слов",
+        "ach_all": "Все {n} слов выучены",
+        "invite": "🎯 Контрольная: {name}, уровень {n}\n\nСдашь — откроются новые слова. "
+                  "Не сдашь — повторим то, что не получилось.",
+        "btn_test": "🎯 Пройти тест", "test_menu": "Какой тест пройдём?", "test_head": "🎯 {name} · уровень {n}",
+        "q_of": "Вопрос {i} из {n}", "wait": "Пересдача через {m} мин. Пока повтори слова.",
+        "no_test": "Тестов пока нет: все уровни пройдены 🏁", "stale": "Этот вопрос уже неактуален",
+        "pass": "✅ Тест сдан: {s} из {n}! Уровень {l} пройден.",
+        "pass_words": "Открыт уровень {l}: новые слова скоро появятся.",
+        "pass_verbs": "Новые глаголы уже ждут в разделе «Глаголы».",
+        "pass_last": "🏁 Это был последний уровень!",
+        "fail": "❌ Тест не сдан: {s} из {n}, нужно {need}. Повторим то, что не получилось:",
+        "fail_words": "Эти слова пришлю ещё раз в течение дня.",
+        "fail_verbs": "Эти глаголы снова открыты в разделе «Глаголы».",
+        "retry_in": "Пересдать можно через {m} мин.", "ach_unlock": "🏆 Новое достижение: {title}!",
+        "locked_verb": "🔒 Этот глагол пока закрыт. Пройди глаголы текущего уровня и сдай тест.",
+        "verbs_done": "Глаголы уровня пройдены!",
+        "verbs_ready": "🎯 Контрольная по глаголам готова. Сдашь — откроются новые.",
+        "review": "Повторим",
+    },
+    "uk": {
+        "map_title": "🗺 Карта Réka", "level": "рівень {n} з {t}", "today": "Сьогодні: слово {n} з {t}",
+        "verbs_progress": "Пройдено дієслів: {n} з {t}", "test_ready": "🎯 Час на контрольну!",
+        "track_done": "🏁 усі рівні пройдено", "learned": "📚 Вивчено слів: {n} з {t}",
+        "next_ach": "🏆 До наступної нагороди: {n}", "all_ach": "🏆 Усі нагороди отримано",
+        "profile_title": "🏆 Профіль", "ach_title": "Досягнення:", "words_noun": "слів",
+        "ach_all": "Усі {n} слів вивчено",
+        "invite": "🎯 Контрольна: {name}, рівень {n}\n\nЗдаси — відкриються нові слова. "
+                  "Не здаси — повторимо те, що не вийшло.",
+        "btn_test": "🎯 Пройти тест", "test_menu": "Який тест пройдемо?", "test_head": "🎯 {name} · рівень {n}",
+        "q_of": "Питання {i} з {n}", "wait": "Перездача через {m} хв. Поки повтори слова.",
+        "no_test": "Тестів поки немає: усі рівні пройдено 🏁", "stale": "Це питання вже неактуальне",
+        "pass": "✅ Тест здано: {s} з {n}! Рівень {l} пройдено.",
+        "pass_words": "Відкрито рівень {l}: нові слова скоро з'являться.",
+        "pass_verbs": "Нові дієслова вже чекають у розділі «Дієслова».",
+        "pass_last": "🏁 Це був останній рівень!",
+        "fail": "❌ Тест не здано: {s} з {n}, потрібно {need}. Повторимо те, що не вийшло:",
+        "fail_words": "Ці слова надішлю ще раз протягом дня.",
+        "fail_verbs": "Ці дієслова знову відкриті в розділі «Дієслова».",
+        "retry_in": "Перездати можна через {m} хв.", "ach_unlock": "🏆 Нове досягнення: {title}!",
+        "locked_verb": "🔒 Це дієслово поки закрите. Пройди дієслова поточного рівня й здай тест.",
+        "verbs_done": "Дієслова рівня пройдено!",
+        "verbs_ready": "🎯 Контрольна з дієслів готова. Здаси — відкриються нові.",
+        "review": "Повторимо",
+    },
+    "en": {
+        "map_title": "🗺 Réka's map", "level": "level {n} of {t}", "today": "Today: word {n} of {t}",
+        "verbs_progress": "Verbs done: {n} of {t}", "test_ready": "🎯 Time for the test!",
+        "track_done": "🏁 all levels done", "learned": "📚 Words learned: {n} of {t}",
+        "next_ach": "🏆 Next reward in: {n}", "all_ach": "🏆 All rewards unlocked",
+        "profile_title": "🏆 Profile", "ach_title": "Achievements:", "words_noun": "words",
+        "ach_all": "All {n} words learned",
+        "invite": "🎯 Test: {name}, level {n}\n\nPass it and new words unlock. "
+                  "Fail and we repeat what went wrong.",
+        "btn_test": "🎯 Take the test", "test_menu": "Which test shall we take?", "test_head": "🎯 {name} · level {n}",
+        "q_of": "Question {i} of {n}", "wait": "Retake in {m} min. Review the words meanwhile.",
+        "no_test": "No tests right now: all levels are done 🏁", "stale": "This question is no longer active",
+        "pass": "✅ Test passed: {s} of {n}! Level {l} complete.",
+        "pass_words": "Level {l} is open: new words are coming soon.",
+        "pass_verbs": "New verbs are waiting in the Verbs section.",
+        "pass_last": "🏁 That was the last level!",
+        "fail": "❌ Test failed: {s} of {n}, need {need}. Let's repeat what went wrong:",
+        "fail_words": "I'll send these words again during the day.",
+        "fail_verbs": "These verbs are open again in the Verbs section.",
+        "retry_in": "You can retake it in {m} min.", "ach_unlock": "🏆 New achievement: {title}!",
+        "locked_verb": "🔒 This verb is still locked. Finish this level's verbs and pass the test.",
+        "verbs_done": "Level verbs done!",
+        "verbs_ready": "🎯 The verbs test is ready. Pass it to unlock new ones.",
+        "review": "Review",
+    },
+}
+TRACK_NAMES = {
+    "adj": {"ru": "Прилагательные", "uk": "Прикметники", "en": "Adjectives"},
+    "num": {"ru": "Числа", "uk": "Числа", "en": "Numbers"},
+    "verbs": {"ru": "Глаголы", "uk": "Дієслова", "en": "Verbs"},
+}
+TRACK_ICONS = {"adj": "🌿", "num": "🔢", "verbs": "🏃"}
+MAP_NAMES = {"ru": "Карта", "uk": "Карта", "en": "Map"}
+PROFILE_NAMES = {"ru": "Профиль", "uk": "Профіль", "en": "Profile"}
+
+
+def TXT(lang, key):
+    return (PT.get(lang) or PT["en"]).get(key) or PT["en"][key]
+
+
+def track_name(key, lang):
+    return TRACK_NAMES[key].get(lang) or TRACK_NAMES[key]["en"]
+
+
+def _label(prefix, names, lang):
+    return f"{prefix} {names.get(lang) or names['en']}"
+
+
+def map_label(lang):
+    return _label("🗺", MAP_NAMES, lang)
+
+
+def profile_label(lang):
+    return _label("🏆", PROFILE_NAMES, lang)
+
+
+# в сравнении убираем невидимый знак эмодзи (U+FE0F): Telegram может его потерять
+MAP_BTNS = {map_label(lg).replace("️", "") for lg in MENU_TXT}
+PROFILE_BTNS = {profile_label(lg).replace("️", "") for lg in MENU_TXT}
+
+
+# ---------- экран карты и профиля
+def test_markup(lang, key):
+    kb = InlineKeyboardMarkup()
+    kb.row(InlineKeyboardButton(TXT(lang, "btn_test"), callback_data=f"tt:{key}"))
+    return kb
+
+
+def map_text(uid, lang):
+    lines = [TXT(lang, "map_title"), ""]
+    for key in TRACK_ORDER:
+        tr = TRACKS[key]
+        p, n = tr.passed(uid), len(tr.levels)
+        status = TXT(lang, "track_done") if tr.finished(uid) else TXT(lang, "level").format(n=p + 1, t=n)
+        lines.append(f"{TRACK_ICONS[key]} {track_name(key, lang)}: {status}")
+        lines.append("".join("✅" if i < p else ("📍" if i == p else "🔒") for i in range(n)))
+        if not tr.finished(uid):
+            size = len(tr.current_ids(uid))
+            if tr.test_ready(uid):
+                lines.append(TXT(lang, "test_ready"))
+            elif key == "verbs":
+                lines.append(TXT(lang, "verbs_progress").format(n=len(tr.st(uid)["done"]), t=size))
+            else:
+                lines.append(TXT(lang, "today").format(n=min(tr.st(uid).get("pos", 0), size - 1) + 1, t=size))
+        lines.append("")
+    total = learned_total(uid)
+    lines.append(TXT(lang, "learned").format(n=total, t=TOTAL_WORDS))
+    nxt = next((n for n, _ in MILESTONES if n > total), None)
+    lines.append(TXT(lang, "next_ach").format(n=nxt - total) if nxt else TXT(lang, "all_ach"))
+    return "\n".join(lines)
+
+
+def map_markup(uid, lang):
+    kb = InlineKeyboardMarkup()
+    for key in TRACK_ORDER:
+        tr = TRACKS[key]
+        if not tr.finished(uid) and tr.test_ready(uid):
+            kb.row(InlineKeyboardButton(f"🎯 {track_name(key, lang)}", callback_data=f"tt:{key}"))
+    kb.row(InlineKeyboardButton(profile_label(lang), callback_data="pf"))
+    return kb
+
+
+def show_map(chat_id, uid, lang):
+    bot.send_message(chat_id, map_text(uid, lang), reply_markup=map_markup(uid, lang))
+
+
+def achievement_title(n, lang):
+    return TXT(lang, "ach_all").format(n=n) if n == TOTAL_WORDS else f"{n} {TXT(lang, 'words_noun')}"
+
+
+def profile_text(uid, lang):
+    total = learned_total(uid)
+    counts = learned_counts(uid)
+    lines = [TXT(lang, "profile_title"), "", TXT(lang, "learned").format(n=total, t=TOTAL_WORDS)]
+    for key in TRACK_ORDER:
+        lines.append(f"   {TRACK_ICONS[key]} {track_name(key, lang)}: {counts[key]}/{len(TRACKS[key].items)}")
+    lines += ["", TXT(lang, "ach_title")]
+    for n, e in MILESTONES:
+        lines.append(f"{e} {achievement_title(n, lang)}" if total >= n else f"🔒 {achievement_title(n, lang)}")
+    return "\n".join(lines)
+
+
+def show_profile(chat_id, uid, lang):
+    bot.send_message(chat_id, profile_text(uid, lang))
+
+
+def send_test_invite(uid, key):
+    lang = user_lang(uid)
+    tr = TRACKS[key]
+    bot.send_message(
+        uid, TXT(lang, "invite").format(name=track_name(key, lang), n=tr.passed(uid) + 1),
+        reply_markup=test_markup(lang, key),
+    )
+
+
+# ---------- контрольные тесты
+VERB_TEST_GROUPS = [["ő", "én", "te", "mi", "ők"], ["past", "past_te"], ["f_ő", "f_én", "f_te", "f_ők"]]
+VERB_TEST_KEYS = ["ő", "én", "te", "mi", "ők", "past", "f_én", "f_ők"]   # из них выбираем вопросы
+
+
+def _word_questions(uid, deck, lang):
+    seen = deck.seen_ids(uid)
+    qs = []
+    for i in deck.current_ids(uid):
+        w = deck.items[i]
+        to_hu = random.random() < 0.5            # то перевод -> слово, то слово -> перевод
+        correct = w[0] if to_hu else tr_of(lang, w)
+        prompt = f"{tr_of(lang, w)} — ?" if to_hu else f"{w[0]} — ?"
+        cand = [j for j in seen if j != i]
+        random.shuffle(cand)
+        cand += [j for j in range(len(deck.items)) if j not in seen]    # запасной вариант: любые слова
+        texts = []
+        for j in cand:
+            t = deck.items[j][0] if to_hu else tr_of(lang, deck.items[j])
+            if t != correct and t not in texts:
+                texts.append(t)
+            if len(texts) == TEST_OPTIONS - 1:
+                break
+        opts = texts + [correct]
+        random.shuffle(opts)
+        qs.append({"id": i, "q": prompt, "opts": opts, "ans": opts.index(correct)})
+    return qs
+
+
+def _verb_questions(uid, lang):
+    l_data = LANGUAGES.get(lang, LANGUAGES["ru"])
+    cut = len(l_data["step"].format(n=1, t=1))
+    qs = []
+    for i in VTRACK.current_ids(uid):
+        verb = VERBS_DATABASE[i]
+        hu, inf = verb[0], verb[3]
+        for key in random.sample(VERB_TEST_KEYS, 2):
+            correct = answers_for(key, hu, inf)[0]
+            group = next(g for g in VERB_TEST_GROUPS if key in g)
+            same = [k for k in group if k != key]
+            other = [k for g in VERB_TEST_GROUPS for k in g if k not in group]
+            random.shuffle(same)
+            random.shuffle(other)
+            texts = []
+            for k in same + other:                 # сначала формы из той же группы (время), потом любые
+                a = answers_for(k, hu, inf)[0]
+                if a != correct and a not in texts:
+                    texts.append(a)
+                if len(texts) == TEST_OPTIONS - 1:
+                    break
+            opts = texts + [correct]
+            random.shuffle(opts)
+            q = make_question(l_data, lang, [key], 1, verb)[cut:]
+            qs.append({"id": i, "q": q, "opts": opts, "ans": opts.index(correct)})
+    return qs
+
+
+def _question_view(uid, test, prefix=""):
+    lang = user_lang(uid)
+    tr = TRACKS[test["track"]]
+    i, qs = test["i"], test["qs"]
+    head = TXT(lang, "test_head").format(name=track_name(test["track"], lang), n=tr.passed(uid) + 1)
+    text = f"{head}\n{TXT(lang, 'q_of').format(i=i + 1, n=len(qs))}\n\n{qs[i]['q']}"
+    if prefix:
+        text = f"{prefix}\n\n{text}"
+    kb = InlineKeyboardMarkup()
+    for oi, o in enumerate(qs[i]["opts"]):
+        kb.row(InlineKeyboardButton(o, callback_data=f"tq:{i}:{oi}"))
+    return text, kb
+
+
+def start_test(uid, chat_id, key):
+    """Запускает тест по дорожке. Возвращает причину отказа текстом или None, если тест начат."""
+    lang = user_lang(uid)
+    tr = TRACKS.get(key)
+    if tr is None:
+        return TXT(lang, "stale")
+    with _prog_lock:
+        if tr.finished(uid):
+            return TXT(lang, "no_test")
+        left = tr.wait_left(uid)
+        if left > 0:
+            return TXT(lang, "wait").format(m=max(1, (left + 59) // 60))
+        qs = _verb_questions(uid, lang) if key == "verbs" else _word_questions(uid, tr, lang)
+        if not qs:
+            return TXT(lang, "no_test")
+        test = {"track": key, "qs": qs, "i": 0, "score": 0, "wrong": []}
+        prog(uid)["test"] = test          # незавершённый прежний тест просто заменяется
+        save_progress()
+        text, kb = _question_view(uid, test)
+    bot.send_message(chat_id, text, reply_markup=kb)
+    return None
+
+
+def _item_label(key, idx, lang):
+    if key == "verbs":
+        hu, ru, en, inf = VERBS_DATABASE[idx]
+        return f"{inf} — {verb_name(lang, ru, en)}"
+    return word_text(lang, TRACKS[key].items[idx])
+
+
+def finish_test(uid, chat_id):
+    lang = user_lang(uid)
+    with _prog_lock:
+        test = prog(uid)["test"]
+        if not test:
+            return
+        prog(uid)["test"] = None
+        key = test["track"]
+        tr = TRACKS[key]
+        n, s = len(test["qs"]), test["score"]
+        need = max(1, math.ceil(PASS_RATIO * n))
+        ok = s >= need
+        level = tr.passed(uid) + 1
+        missed = sorted(set(test["wrong"]))
+        if ok:
+            tr.pass_level(uid)
+            new_ach = check_achievements(uid)
+        else:
+            tr.fail_level(uid, missed)
+            new_ach = []
+        last = tr.finished(uid)
+    if ok:
+        parts = [TXT(lang, "pass").format(s=s, n=n, l=level)]
+        if last:
+            parts.append(TXT(lang, "pass_last"))
+        elif key == "verbs":
+            parts.append(TXT(lang, "pass_verbs"))
+        else:
+            parts.append(TXT(lang, "pass_words").format(l=level + 1))
+    else:
+        parts = [TXT(lang, "fail").format(s=s, n=n, need=need)]
+        parts += [f"• {_item_label(key, i, lang)}" for i in missed]
+        parts.append(TXT(lang, "fail_verbs" if key == "verbs" else "fail_words"))
+        parts.append(TXT(lang, "retry_in").format(m=TEST_COOLDOWN // 60))
+    bot.send_message(chat_id, "\n".join(parts))
+    for n_words, emoji in new_ach:
+        bot.send_message(chat_id, TXT(lang, "ach_unlock").format(title=f"{emoji} {achievement_title(n_words, lang)}"))
+
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("tt:"))
+def on_test_start(call):
+    try:
+        uid = call.from_user.id
+        all_users.add(uid)
+        reason = start_test(uid, call.message.chat.id, call.data[3:])
+        bot.answer_callback_query(call.id, reason, show_alert=bool(reason))
+    except Exception as e:
+        print(f"Ошибка запуска теста: {e}")
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("tq:"))
+def on_test_answer(call):
+    uid = call.from_user.id
+    lang = user_lang(uid)
+    try:
+        _, i_s, o_s = call.data.split(":")
+        i, o = int(i_s), int(o_s)
+        with _prog_lock:
+            test = prog(uid)["test"]
+            if not test or test["i"] != i or not 0 <= o < len(test["qs"][i]["opts"]):
+                bot.answer_callback_query(call.id, TXT(lang, "stale"))
+                return
+            q = test["qs"][i]
+            right = o == q["ans"]
+            if right:
+                test["score"] += 1
+            else:
+                test["wrong"].append(q["id"])
+            test["i"] += 1
+            correct = q["opts"][q["ans"]]
+            line = f"✅ {correct}" if right else f"❌ {q['opts'][o]} → ✅ {correct}"
+            done = test["i"] >= len(test["qs"])
+            save_progress()
+            view = None if done else _question_view(uid, test, line)
+        bot.answer_callback_query(call.id, "✅" if right else "❌")
+        chat_id, mid = call.message.chat.id, call.message.message_id
+        if view:
+            bot.edit_message_text(view[0], chat_id, mid, reply_markup=view[1])
+        else:
+            bot.edit_message_text(line, chat_id, mid)     # убираем кнопки у последнего вопроса
+            finish_test(uid, chat_id)
+    except Exception as e:
+        print(f"Ошибка ответа на тест: {e}")
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
+
+
+@bot.message_handler(commands=["test"])
+def cmd_test(message):
+    uid = message.from_user.id
+    all_users.add(uid)
+    lang = user_lang(uid)
+    kb = InlineKeyboardMarkup()
+    for key in TRACK_ORDER:
+        tr = TRACKS[key]
+        if not tr.finished(uid):
+            kb.row(InlineKeyboardButton(
+                f"🎯 {track_name(key, lang)} · {TXT(lang, 'level').format(n=tr.passed(uid) + 1, t=len(tr.levels))}",
+                callback_data=f"tt:{key}"))
+    if kb.keyboard:
+        bot.send_message(message.chat.id, TXT(lang, "test_menu"), reply_markup=kb)
+    else:
+        bot.send_message(message.chat.id, TXT(lang, "no_test"))
+
+
+@bot.message_handler(commands=["map"])
+def cmd_map(message):
+    uid = message.from_user.id
+    all_users.add(uid)
+    show_map(message.chat.id, uid, user_lang(uid))
+
+
+@bot.message_handler(commands=["profile"])
+def cmd_profile(message):
+    uid = message.from_user.id
+    all_users.add(uid)
+    show_profile(message.chat.id, uid, user_lang(uid))
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "pf")
+def on_profile_button(call):
+    try:
+        uid = call.from_user.id
+        show_profile(call.message.chat.id, uid, user_lang(uid))
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        print(f"Ошибка профиля: {e}")
 
 
 def day_slots(day):
@@ -1887,14 +2490,115 @@ def user_lang(user_id):
     return active_trainings.get(user_id, {}).get("lang") or "ru"
 
 
+# ---------- озвучка: венгерское произношение голосовым сообщением (кнопка 🔊)
+TTS_VOICE = os.getenv("TTS_VOICE", "hu-HU-NoemiNeural")   # венгерский женский голос Microsoft
+TTS_RATE = os.getenv("TTS_RATE", "-10%")                   # чуть медленнее обычного, чтобы разобрать на слух
+AUDIO_DIR = os.path.join(DATA_DIR, "audio")
+AUDIO_IDS_FILE = os.path.join(DATA_DIR, "audio_ids.json")
+AUDIO_BTN = "🔊"
+AUDIO_FAIL = {
+    "ru": "Не получилось озвучить, попробуй позже",
+    "uk": "Не вдалося озвучити, спробуй пізніше",
+    "en": "Couldn't make the audio, try again later",
+}
+_tts_lock = threading.Lock()
+
+
+def _load_audio_ids():
+    try:
+        with open(AUDIO_IDS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+_audio_ids = _load_audio_ids()   # {текст: file_id в Telegram}: повторно ничего не загружаем
+
+
+def _save_audio_ids():
+    try:
+        with open(AUDIO_IDS_FILE, "w", encoding="utf-8") as f:
+            json.dump(_audio_ids, f)
+    except Exception as e:
+        print(f"Не удалось сохранить audio_ids.json: {e}")
+
+
+def speech_file(text):
+    """Путь к mp3 с произношением. Каждый текст озвучивается один раз и лежит в кэше."""
+    if edge_tts is None:
+        return None
+    os.makedirs(AUDIO_DIR, exist_ok=True)
+    name = hashlib.sha1(f"{TTS_VOICE}|{TTS_RATE}|{text}".encode("utf-8")).hexdigest()[:16]
+    path = os.path.join(AUDIO_DIR, f"{name}.mp3")
+    with _tts_lock:
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            return path
+        tmp = path + ".part"
+        asyncio.run(edge_tts.Communicate(text, TTS_VOICE, rate=TTS_RATE).save(tmp))
+        os.replace(tmp, path)
+    return path
+
+
+def send_speech(chat_id, text):
+    """Присылает голосовое сообщение с произношением текста. True, если получилось."""
+    text = text.strip()
+    if not text:
+        return False
+    try:
+        bot.send_chat_action(chat_id, "record_voice")
+    except Exception:
+        pass
+    try:
+        fid = _audio_ids.get(text)
+        if fid:
+            try:
+                bot.send_voice(chat_id, fid)
+                return True
+            except Exception:
+                _audio_ids.pop(text, None)     # file_id устарел: озвучим заново
+        path = speech_file(text)
+        if not path:
+            return False
+        with open(path, "rb") as f:
+            sent = bot.send_voice(chat_id, f)
+        info = getattr(sent, "voice", None) or getattr(sent, "audio", None)
+        if info is not None and getattr(info, "file_id", None):
+            _audio_ids[text] = info.file_id
+            _save_audio_ids()
+        return True
+    except Exception as e:
+        print(f"Ошибка озвучки «{text}»: {e}")
+        return False
+
+
+def audio_fail_text(lang):
+    return AUDIO_FAIL.get(lang, AUDIO_FAIL["en"])
+
+
+def audio_button(deck, w):
+    return InlineKeyboardButton(AUDIO_BTN, callback_data=f"au:{deck.tag}:{deck.index(w)}")
+
+
+def audio_markup(deck, w):
+    """Клавиатура только с кнопкой 🔊 (или None, если озвучка не подключена)."""
+    if edge_tts is None:
+        return None
+    kb = InlineKeyboardMarkup()
+    kb.row(audio_button(deck, w))
+    return kb
+
+
 CHANGE_BTN = {
     "w": {"ru": "🔄 Знаю, другое слово", "uk": "🔄 Знаю, інше слово", "en": "🔄 I know it, next word"},
     "n": {"ru": "🔄 Знаю, другое число", "uk": "🔄 Знаю, інше число", "en": "🔄 I know it, next number"},
 }
 
 
-def change_markup(lang, deck=ADJ):
+def change_markup(lang, deck=ADJ, w=None):
+    """Кнопки под словом: 🔊 (если передано слово и озвучка подключена) и «Знаю, другое»."""
     kb = InlineKeyboardMarkup()
+    if w is not None and edge_tts is not None:
+        kb.row(audio_button(deck, w))
     btn = CHANGE_BTN[deck.tag]
     kb.row(InlineKeyboardButton(btn.get(lang, btn["en"]), callback_data=f"{deck.tag}n"))
     return kb
@@ -1967,7 +2671,7 @@ def cmd_word(message):
     for key, deck in DECKS.items():
         if key in modes:
             w = deck.user_item(uid, today)
-            bot.send_message(message.chat.id, word_text(lang, w), reply_markup=change_markup(lang, deck))
+            bot.send_message(message.chat.id, word_text(lang, w), reply_markup=change_markup(lang, deck, w))
 
 
 @bot.message_handler(commands=["newword"])
@@ -1975,8 +2679,11 @@ def cmd_newword(message):
     uid = message.from_user.id
     all_users.add(uid)
     lang = user_lang(uid)
-    w = ADJ.change(uid, budapest_now().date())
-    bot.send_message(message.chat.id, word_text(lang, w), reply_markup=change_markup(lang, ADJ))
+    w = ADJ.skip(uid, budapest_now().date())
+    if w is None:
+        send_test_invite(uid, "adj")
+        return
+    bot.send_message(message.chat.id, word_text(lang, w), reply_markup=change_markup(lang, ADJ, w))
 
 
 @bot.message_handler(commands=["modes"])
@@ -2003,7 +2710,7 @@ def on_modes_callback(call):
         if now_on:   # сразу показываем первое слово (число), чтобы было видно, что режим работает
             deck = DECKS[key]
             w = deck.user_item(uid, budapest_now().date())
-            bot.send_message(call.message.chat.id, word_text(lang, w), reply_markup=change_markup(lang, deck))
+            bot.send_message(call.message.chat.id, word_text(lang, w), reply_markup=change_markup(lang, deck, w))
     except Exception as e:
         print(f"Ошибка переключения режима: {e}")
         try:
@@ -2045,13 +2752,15 @@ def send_word(user_id, w, fmt="plain", day=None, deck=ADJ):
     Клавиатура и тренировка не трогаются."""
     lang = user_lang(user_id)
     hu = w[0]
-    markup = change_markup(lang, deck)
+    markup = change_markup(lang, deck, w)
     if fmt == "spoiler":
         bot.send_message(
             user_id, f"{escape_markdown_v2(hu)} — ||{escape_markdown_v2(tr_of(lang, w))}||",
             parse_mode="MarkdownV2", reply_markup=markup)
     elif fmt == "quiz":
-        others = random.sample([x for x in deck.items if x != w], 2)
+        pool = [deck.items[i] for i in deck.seen_ids(user_id) if deck.items[i] != w]
+        pool += [x for x in deck.items if x != w and x not in pool]
+        others = pool[:2] if len(deck.seen_ids(user_id)) <= 2 else random.sample(pool[:max(2, len(deck.seen_ids(user_id)) - 1)], 2)
         opts = others + [w]
         random.shuffle(opts)
         kb = InlineKeyboardMarkup()
@@ -2074,12 +2783,13 @@ def send_word(user_id, w, fmt="plain", day=None, deck=ADJ):
                          reply_markup=markup)
     elif fmt == "old" and day is not None:
         n = random.choice([1, 3, 7])
-        old = deck.of_day(day - timedelta(days=n))
-        if old == w or deck.index(old) in deck.known(user_id):
+        old = deck.review_item(user_id)
+        if old is None or old == w:
             bot.send_message(user_id, word_text(lang, w), reply_markup=markup)
         else:
-            label = OLD_LABELS[n].get(lang, OLD_LABELS[n]["en"])
-            bot.send_message(user_id, f"{label}: {word_text(lang, old)}", reply_markup=markup)
+            label = TXT(lang, "review")
+            bot.send_message(user_id, f"{label}: {word_text(lang, old)}",
+                             reply_markup=change_markup(lang, deck, old))
     else:
         bot.send_message(user_id, word_text(lang, w), reply_markup=markup)
 
@@ -2090,9 +2800,13 @@ def on_word_change(call):
         uid = call.from_user.id
         deck = DECK_BY_TAG[call.data[0]]
         lang = user_lang(uid)
-        new = deck.change(uid, budapest_now().date())
+        new = deck.skip(uid, budapest_now().date())
+        if new is None:       # слова уровня закончились: пора на контрольную
+            bot.answer_callback_query(call.id, "🎯")
+            send_test_invite(uid, deck.key)
+            return
         bot.edit_message_text(word_text(lang, new), call.message.chat.id, call.message.message_id,
-                              reply_markup=change_markup(lang, deck))
+                              reply_markup=change_markup(lang, deck, new))
         bot.answer_callback_query(call.id, "🔄")
     except Exception as e:
         print(f"Ошибка смены слова: {e}")
@@ -2110,7 +2824,8 @@ def on_word_quiz(call):
         w, o = deck.items[int(wi)], deck.items[int(oi)]
         lang = user_lang(call.from_user.id)
         if w == o:
-            bot.edit_message_text(f"✅ {word_text(lang, w)}", call.message.chat.id, call.message.message_id)
+            bot.edit_message_text(f"✅ {word_text(lang, w)}", call.message.chat.id, call.message.message_id,
+                                  reply_markup=audio_markup(deck, w))
             bot.answer_callback_query(call.id, "✅")
         else:
             kb = InlineKeyboardMarkup()
@@ -2122,6 +2837,23 @@ def on_word_quiz(call):
             bot.answer_callback_query(call.id, "❌")
     except Exception as e:
         print(f"Ошибка quiz слова: {e}")
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("au:"))
+def on_audio(call):
+    try:
+        _, tag, idx = call.data.split(":")
+        w = DECK_BY_TAG[tag].items[int(idx)]
+        if send_speech(call.message.chat.id, w[0]):
+            bot.answer_callback_query(call.id)
+        else:
+            bot.answer_callback_query(call.id, audio_fail_text(user_lang(call.from_user.id)))
+    except Exception as e:
+        print(f"Ошибка озвучки слова: {e}")
         try:
             bot.answer_callback_query(call.id)
         except Exception:
@@ -2161,6 +2893,23 @@ def scheduler_tick(now):
                     except Exception as e:
                         print(f"Ошибка слова дня ({key}) {user_id}: {e}")
                     time.sleep(0.05)
+
+    # приглашение на контрольную: раз в день после 12:00, если все слова уровня показаны
+    if now_min >= 12 * 60:
+        for user_id in list(all_users):
+            for key in TRACK_ORDER:
+                tr = TRACKS[key]
+                if key in DECKS and key not in user_modes(user_id):
+                    continue
+                if key == "verbs" and "verbs" not in prog(user_id)["tracks"]:
+                    continue
+                if tr.finished(user_id) or not tr.test_ready(user_id) or (today, "ti", key, user_id) in _sent:
+                    continue
+                _sent.add((today, "ti", key, user_id))
+                try:
+                    send_test_invite(user_id, key)
+                except Exception as e:
+                    print(f"Ошибка приглашения на тест {user_id}: {e}")
 
 
 def daily_reminders_loop():
@@ -2221,8 +2970,16 @@ def handle_all_messages(message):
         bot.send_message(
             message.chat.id,
             l_data["choose_btn"],
-            reply_markup=get_verbs_keyboard(lang, recent),
+            reply_markup=get_verbs_keyboard(lang, recent, user_id),
         )
+        return
+
+    # --- карта и профиль
+    if text.replace("\ufe0f", "") in MAP_BTNS and "verb" not in data:
+        show_map(message.chat.id, user_id, lang)
+        return
+    if text.replace("\ufe0f", "") in PROFILE_BTNS and "verb" not in data:
+        show_profile(message.chat.id, user_id, lang)
         return
 
     # --- игра с картинками
@@ -2232,7 +2989,11 @@ def handle_all_messages(message):
 
     # --- выбор глагола
     if "verb" not in data:
-        found = find_verb(text)
+        found = find_verb(text, user_id)
+        if found == "locked":
+            bot.send_message(message.chat.id, TXT(lang, "locked_verb"),
+                             reply_markup=get_verbs_keyboard(lang, recent, user_id))
+            return
         if not found:
             send_reka_ai(
                 message.chat.id, user_id, text, lang,
@@ -2254,6 +3015,13 @@ def handle_all_messages(message):
     steps = data["steps"]
     step = data["step"]
     key = steps[step - 1]
+
+    # --- кнопка 🔊: произносим текущий ответ (тот же, что под спойлером)
+    if text == AUDIO_BTN:
+        if not send_speech(message.chat.id, hint_for(key, hu, inf)):
+            bot.send_message(message.chat.id, audio_fail_text(lang))
+        return
+
     answers = answers_for(key, hu, inf)
 
     user_text = norm(text)
@@ -2270,14 +3038,18 @@ def handle_all_messages(message):
             data.pop("steps", None)
             data["step"] = 0
             recent.append(hu)
+            VTRACK.mark_done(user_id, VERBS_DATABASE.index(verb))
+            prog(user_id)["tracks"].setdefault("verbs", {})
             data["recent"] = recent[-RECENT_LIMIT:]
             send_reka_chat(message.chat.id, lang)
             time.sleep(1.0)
             bot.send_message(
                 message.chat.id,
                 f"{random.choice(KAO_DONE)} {l_data['finish']}",
-                reply_markup=get_verbs_keyboard(lang, data["recent"]),
+                reply_markup=get_verbs_keyboard(lang, data["recent"], user_id),
             )
+            if VTRACK.test_ready(user_id) and not VTRACK.finished(user_id):
+                bot.send_message(message.chat.id, TXT(lang, "verbs_ready"), reply_markup=test_markup(lang, "verbs"))
         else:
             if step % 2 == 0:
                 praise = f"{l_data['correct']} {random.choice(KAO_HAPPY)}"
@@ -2300,6 +3072,9 @@ try:   # меню команд (кнопка «/» рядом с полем вв
         BotCommand("word", "Слово дня"),
         BotCommand("newword", "Другое слово дня"),
         BotCommand("modes", "Режимы: прилагательные и числа"),
+        BotCommand("map", "Карта прогресса"),
+        BotCommand("test", "Контрольный тест"),
+        BotCommand("profile", "Профиль и достижения"),
         BotCommand("menu", "Главное меню"),
     ])
 except Exception as e:
