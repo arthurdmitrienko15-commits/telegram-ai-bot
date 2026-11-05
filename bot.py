@@ -1219,6 +1219,7 @@ def main_keyboard(lang):
     row = [KeyboardButton(text=verbs_label(lang))]
     if available_cards():
         row.append(KeyboardButton(text=CARDS_BTN))
+    kb.row(KeyboardButton(text=lesson_label(lang)), KeyboardButton(text=review_label(lang)))
     kb.row(*row)
     kb.row(KeyboardButton(text=modes_label(lang)))
     kb.row(KeyboardButton(text=map_label(lang)), KeyboardButton(text=profile_label(lang)))
@@ -1639,112 +1640,182 @@ def cmd_start(message):
         )
 
 
-# ---------------------------------------------------------- слово дня
-# (венгерский, русский, украинский, английский)
-WORDS = [
-    ("éhes", "голодный", "голодний", "hungry"),
-    ("szomjas", "жаждущий", "спраглий", "thirsty"),
-    ("meleg", "тёплый", "теплий", "warm"),
-    ("hideg", "холодный", "холодний", "cold"),
-    ("forró", "горячий", "гарячий", "hot"),
-    ("hűvös", "прохладный", "прохолодний", "cool"),
-    ("nagy", "большой", "великий", "big"),
-    ("kicsi", "маленький", "маленький", "small"),
-    ("szép", "красивый", "гарний", "beautiful"),
-    ("csúnya", "некрасивый", "негарний", "ugly"),
-    ("jó", "хороший", "добрий", "good"),
-    ("rossz", "плохой", "поганий", "bad"),
-    ("új", "новый", "новий", "new"),
-    ("régi", "старый (давний)", "старий (давній)", "old (of things)"),
-    ("gyors", "быстрый", "швидкий", "fast"),
-    ("lassú", "медленный", "повільний", "slow"),
-    ("magas", "высокий", "високий", "tall"),
-    ("alacsony", "низкий", "низький", "short / low"),
-    ("hosszú", "длинный", "довгий", "long"),
-    ("rövid", "короткий", "короткий", "short"),
-    ("vastag", "толстый", "товстий", "thick"),
-    ("vékony", "тонкий", "тонкий", "thin"),
-    ("olcsó", "дешёвый", "дешевий", "cheap"),
-    ("drága", "дорогой", "дорогий", "expensive"),
-    ("könnyű", "лёгкий", "легкий", "easy / light"),
-    ("nehéz", "тяжёлый / трудный", "важкий / складний", "heavy / difficult"),
-    ("boldog", "счастливый", "щасливий", "happy"),
-    ("szomorú", "грустный", "сумний", "sad"),
-    ("fáradt", "усталый", "втомлений", "tired"),
-    ("vidám", "весёлый", "веселий", "cheerful"),
-    ("okos", "умный", "розумний", "smart"),
-    ("buta", "глупый", "дурний", "stupid"),
-    ("erős", "сильный", "сильний", "strong"),
-    ("gyenge", "слабый", "слабкий", "weak"),
-    ("tiszta", "чистый", "чистий", "clean"),
-    ("piszkos", "грязный", "брудний", "dirty"),
-    ("nyitott", "открытый", "відкритий", "open"),
-    ("zárt", "закрытый", "закритий", "closed"),
-    ("üres", "пустой", "порожній", "empty"),
-    ("tele", "полный", "повний", "full"),
-    ("fiatal", "молодой", "молодий", "young"),
-    ("öreg", "старый (о человеке)", "старий (про людину)", "old (of people)"),
-    ("gazdag", "богатый", "багатий", "rich"),
-    ("szegény", "бедный", "бідний", "poor"),
-    ("édes", "сладкий", "солодкий", "sweet"),
-    ("savanyú", "кислый", "кислий", "sour"),
-    ("finom", "вкусный", "смачний", "tasty"),
-    ("csendes", "тихий", "тихий", "quiet"),
-    ("hangos", "громкий", "гучний", "loud"),
-    ("sötét", "тёмный", "темний", "dark"),
-    ("világos", "светлый", "світлий", "light / bright"),
-    ("puha", "мягкий", "м'який", "soft"),
-    ("kemény", "твёрдый", "твердий", "hard"),
-    ("száraz", "сухой", "сухий", "dry"),
-    ("nedves", "мокрый", "мокрий", "wet"),
-    ("egészséges", "здоровый", "здоровий", "healthy"),
-    ("beteg", "больной", "хворий", "sick"),
-    ("szabad", "свободный", "вільний", "free"),
-    ("elfoglalt", "занятой", "зайнятий", "busy"),
-    ("kedves", "милый / добрый", "милий / добрий", "kind / sweet"),
-    ("bátor", "смелый", "сміливий", "brave"),
-    ("mérges", "злой / сердитый", "злий / сердитий", "angry"),
-    ("kíváncsi", "любопытный", "допитливий", "curious"),
-    ("unalmas", "скучный", "нудний", "boring"),
-    ("érdekes", "интересный", "цікавий", "interesting"),
-    ("fontos", "важный", "важливий", "important"),
-    ("veszélyes", "опасный", "небезпечний", "dangerous"),
-    ("biztonságos", "безопасный", "безпечний", "safe"),
-    ("mély", "глубокий", "глибокий", "deep"),
-    ("széles", "широкий", "широкий", "wide"),
-    ("keskeny", "узкий", "вузький", "narrow"),
+# ---------------------------------------------------------- курс: юниты по жизненным ситуациям
+# Только самые нужные слова и готовые фразы. Юнит = одна ситуация (кафе, магазин, транспорт...).
+# Новый юнит открывается после контрольной. Карточки возвращаются по интервалам: 1, 3, 7, 14, 30 дней.
+INTERVALS = {1: 1, 2: 3, 3: 7, 4: 14, 5: 30}   # через сколько дней карточка вернётся, по номеру «коробки»
+MAX_BOX = 5
+LEARNED_BOX = 2          # карточка считается выученной, когда её уже верно вспомнили после перерыва
+LESSON_SIZE = 4          # новых карточек за один заход
+NEW_PER_DAY = 12         # больше новых за день не даём: надо дать словам улечься
+REVIEW_BATCH = 6         # карточек в одном повторе
+
+
+def _c(hu, ru, uk, en):
+    return (hu, ru, uk, en)
+
+
+UNITS = [
+    {"name": {"ru": "Привет и знакомство", "uk": "Привіт і знайомство", "en": "Hello & basics"},
+     "words": [
+         _c("szia", "привет", "привіт", "hi"),
+         _c("jó napot", "добрый день", "добрий день", "good day"),
+         _c("köszönöm", "спасибо", "дякую", "thank you"),
+         _c("kérem", "пожалуйста", "будь ласка", "please"),
+         _c("igen", "да", "так", "yes"),
+         _c("nem", "нет", "ні", "no"),
+         _c("bocsánat", "извините", "вибачте", "sorry"),
+         _c("viszontlátásra", "до свидания", "до побачення", "goodbye"),
+     ],
+     "phrases": [
+         _c("Hogy hívnak?", "Как тебя зовут?", "Як тебе звати?", "What's your name?"),
+         _c("A nevem Réka.", "Меня зовут Réka.", "Мене звати Réka.", "My name is Réka."),
+         _c("Nem értem.", "Я не понимаю.", "Я не розумію.", "I don't understand."),
+     ]},
+    {"name": {"ru": "Кафе", "uk": "Кафе", "en": "Café"},
+     "words": [
+         _c("kávé", "кофе", "кава", "coffee"),
+         _c("tea", "чай", "чай", "tea"),
+         _c("víz", "вода", "вода", "water"),
+         _c("sör", "пиво", "пиво", "beer"),
+         _c("étlap", "меню", "меню", "menu"),
+         _c("számla", "счёт", "рахунок", "bill"),
+         _c("asztal", "стол", "стіл", "table"),
+         _c("torta", "торт", "торт", "cake"),
+     ],
+     "phrases": [
+         _c("Egy kávét kérek.", "Один кофе, пожалуйста.", "Одну каву, будь ласка.", "One coffee, please."),
+         _c("Kérem a számlát.", "Счёт, пожалуйста.", "Рахунок, будь ласка.", "The bill, please."),
+         _c("Van tea?", "Есть чай?", "Чай є?", "Do you have tea?"),
+     ]},
+    {"name": {"ru": "Магазин", "uk": "Магазин", "en": "Shop"},
+     "words": [
+         _c("kenyér", "хлеб", "хліб", "bread"),
+         _c("tej", "молоко", "молоко", "milk"),
+         _c("sajt", "сыр", "сир", "cheese"),
+         _c("alma", "яблоко", "яблуко", "apple"),
+         _c("drága", "дорогой", "дорогий", "expensive"),
+         _c("olcsó", "дешёвый", "дешевий", "cheap"),
+         _c("sok", "много", "багато", "a lot"),
+         _c("kevés", "мало", "мало", "a little"),
+     ],
+     "phrases": [
+         _c("Mennyibe kerül?", "Сколько это стоит?", "Скільки це коштує?", "How much is it?"),
+         _c("Ez drága.", "Это дорого.", "Це дорого.", "This is expensive."),
+         _c("Egy kilót kérek.", "Мне килограмм, пожалуйста.", "Мені кілограм, будь ласка.", "A kilo, please."),
+     ]},
+    {"name": {"ru": "Числа 1–8", "uk": "Числа 1–8", "en": "Numbers 1–8"},
+     "words": [
+         _c("egy", "один (1)", "один (1)", "one (1)"),
+         _c("kettő", "два (2)", "два (2)", "two (2)"),
+         _c("három", "три (3)", "три (3)", "three (3)"),
+         _c("négy", "четыре (4)", "чотири (4)", "four (4)"),
+         _c("öt", "пять (5)", "п'ять (5)", "five (5)"),
+         _c("hat", "шесть (6)", "шість (6)", "six (6)"),
+         _c("hét", "семь (7)", "сім (7)", "seven (7)"),
+         _c("nyolc", "восемь (8)", "вісім (8)", "eight (8)"),
+     ],
+     "phrases": [
+         _c("Két kávét kérek.", "Два кофе, пожалуйста.", "Дві кави, будь ласка.", "Two coffees, please."),
+     ]},
+    {"name": {"ru": "Числа и цены", "uk": "Числа і ціни", "en": "Numbers & prices"},
+     "words": [
+         _c("kilenc", "девять (9)", "дев'ять (9)", "nine (9)"),
+         _c("tíz", "десять (10)", "десять (10)", "ten (10)"),
+         _c("húsz", "двадцать (20)", "двадцять (20)", "twenty (20)"),
+         _c("harminc", "тридцать (30)", "тридцять (30)", "thirty (30)"),
+         _c("ötven", "пятьдесят (50)", "п'ятдесят (50)", "fifty (50)"),
+         _c("száz", "сто (100)", "сто (100)", "one hundred (100)"),
+         _c("ezer", "тысяча (1000)", "тисяча (1000)", "one thousand (1000)"),
+         _c("forint", "форинт", "форинт", "forint"),
+     ],
+     "phrases": [
+         _c("Ez ezer forint.", "Это тысяча форинтов.", "Це тисяча форинтів.", "This is a thousand forints."),
+         _c("Hány éves vagy?", "Сколько тебе лет?", "Скільки тобі років?", "How old are you?"),
+         _c("Húsz éves vagyok.", "Мне двадцать лет.", "Мені двадцять років.", "I'm twenty years old."),
+     ]},
+    {"name": {"ru": "Город и транспорт", "uk": "Місто і транспорт", "en": "City & transport"},
+     "words": [
+         _c("busz", "автобус", "автобус", "bus"),
+         _c("villamos", "трамвай", "трамвай", "tram"),
+         _c("metró", "метро", "метро", "metro"),
+         _c("vonat", "поезд", "потяг", "train"),
+         _c("megálló", "остановка", "зупинка", "stop"),
+         _c("jegy", "билет", "квиток", "ticket"),
+         _c("balra", "налево", "ліворуч", "left"),
+         _c("jobbra", "направо", "праворуч", "right"),
+     ],
+     "phrases": [
+         _c("Hol van a megálló?", "Где остановка?", "Де зупинка?", "Where is the stop?"),
+         _c("Egy jegyet kérek.", "Один билет, пожалуйста.", "Один квиток, будь ласка.", "One ticket, please."),
+         _c("Merre van a metró?", "В какой стороне метро?", "В який бік метро?", "Which way is the metro?"),
+     ]},
+    {"name": {"ru": "Люди и язык", "uk": "Люди і мова", "en": "People & language"},
+     "words": [
+         _c("én", "я", "я", "I"),
+         _c("te", "ты", "ти", "you"),
+         _c("ő", "он / она", "він / вона", "he / she"),
+         _c("mi", "мы", "ми", "we"),
+         _c("barát", "друг", "друг", "friend"),
+         _c("család", "семья", "родина", "family"),
+         _c("anya", "мама", "мама", "mom"),
+         _c("apa", "папа", "тато", "dad"),
+     ],
+     "phrases": [
+         _c("Magyarul tanulok.", "Я учу венгерский.", "Я вчу угорську.", "I'm learning Hungarian."),
+         _c("Oroszul beszélek.", "Я говорю по-русски.", "Я говорю російською.", "I speak Russian."),
+         _c("Beszélsz angolul?", "Ты говоришь по-английски?", "Ти говориш англійською?", "Do you speak English?"),
+     ]},
+    {"name": {"ru": "Описания", "uk": "Опис", "en": "Describing things"},
+     "words": [
+         _c("jó", "хороший", "хороший", "good"),
+         _c("rossz", "плохой", "поганий", "bad"),
+         _c("nagy", "большой", "великий", "big"),
+         _c("kicsi", "маленький", "маленький", "small"),
+         _c("új", "новый", "новий", "new"),
+         _c("szép", "красивый", "гарний", "beautiful"),
+         _c("meleg", "тёплый", "теплий", "warm"),
+         _c("hideg", "холодный", "холодний", "cold"),
+     ],
+     "phrases": [
+         _c("Nagyon jó!", "Очень хорошо!", "Дуже добре!", "Very good!"),
+         _c("Ez nagyon szép.", "Это очень красиво.", "Це дуже гарно.", "This is very beautiful."),
+         _c("Hideg van.", "Холодно.", "Холодно.", "It's cold."),
+     ]},
+    {"name": {"ru": "Время", "uk": "Час", "en": "Time"},
+     "words": [
+         _c("ma", "сегодня", "сьогодні", "today"),
+         _c("holnap", "завтра", "завтра", "tomorrow"),
+         _c("tegnap", "вчера", "вчора", "yesterday"),
+         _c("most", "сейчас", "зараз", "now"),
+         _c("reggel", "утро", "ранок", "morning"),
+         _c("este", "вечер", "вечір", "evening"),
+         _c("nap", "день", "день", "day"),
+         _c("éjszaka", "ночь", "ніч", "night"),
+     ],
+     "phrases": [
+         _c("Hány óra van?", "Который час?", "Котра година?", "What time is it?"),
+         _c("Holnap találkozunk.", "Увидимся завтра.", "Побачимось завтра.", "See you tomorrow."),
+         _c("Jó reggelt!", "Доброе утро!", "Доброго ранку!", "Good morning!"),
+     ]},
 ]
-# Режимы «слова дня» (колоды). У каждого режима свой список, свои сообщения в течение дня
-# и своя память «знаю» у каждого пользователя. Режимов можно включить несколько сразу.
-WORDS_PER_DAY = 14            # прилагательные: сколько сообщений в день (меняй как хочешь)
-NUMBERS_PER_DAY = 10          # числа: сколько сообщений в день
-WORD_START = 8 * 60           # с 08:00 (минуты от полуночи)
-WORD_END = 22 * 60 + 30       # до 22:30
-WORD_MIN_GAP = 25             # минимум минут между сообщениями одного режима
-MODES_MIN_GAP = 8             # минимум минут между сообщениями РАЗНЫХ режимов
-# вес формата: обычное «hu — tr» самое частое
-WORD_FORMATS = [("plain", 6), ("spoiler", 2), ("quiz", 2), ("example", 2), ("big", 1.5), ("old", 1.5)]
-OLD_LABELS = {
-    1: {"ru": "вчера", "uk": "вчора", "en": "yesterday"},
-    3: {"ru": "3 дня назад", "uk": "3 дні тому", "en": "3 days ago"},
-    7: {"ru": "неделю назад", "uk": "тиждень тому", "en": "a week ago"},
-}
-QUIZ_RIGHT = {"ru": "верно", "uk": "вірно", "en": "correct"}
-DEFAULT_MODES = ["adj"]       # у кого режимы не настроены, всё как раньше: только прилагательные
+
+CARDS, CARD_KIND, UNIT_IDS = [], [], []     # все карточки, их тип ("w" слово / "p" фраза), номера карточек по юнитам
+for _u in UNITS:
+    _ids = []
+    for _kind, _lst in (("w", _u["words"]), ("p", _u["phrases"])):
+        for _card in _lst:
+            _ids.append(len(CARDS))
+            CARDS.append(_card)
+            CARD_KIND.append(_kind)
+    UNIT_IDS.append(_ids)
 
 
-def _num(n, hu):
-    """Число в том же виде, что и слово: (венгерский, ru, uk, en). Перевод везде один: цифры."""
-    return (hu, str(n), str(n), str(n))
+def unit_name(ui, lang):
+    n = UNITS[ui]["name"]
+    return n.get(lang) or n["en"]
 
-
-# Числа идут по порядку: сначала десятки, потом сотни и цены в форинтах.
-NUMBERS = [
-    _num(10, "tíz"), _num(20, "húsz"), _num(30, "harminc"), _num(40, "negyven"), _num(50, "ötven"),
-    _num(60, "hatvan"), _num(70, "hetven"), _num(80, "nyolcvan"), _num(90, "kilencven"),
-    _num(100, "száz"), _num(200, "kétszáz"), _num(300, "háromszáz"), _num(500, "ötszáz"),
-    _num(1000, "ezer"), _num(2000, "kétezer"), _num(5000, "ötezer"),
-]
+UNIT_OF_CARD = [ui for ui, ids in enumerate(UNIT_IDS) for _ in ids]
 
 
 # ---------------------------------------------------------------- прогресс: карта, уровни, тесты
@@ -1752,7 +1823,7 @@ NUMBERS = [
 # Слова уровня идут по одному в день, в конце контрольный тест: сдал, открывается следующий
 # уровень; не сдал, повторяем то, что не получилось, а новые слова закрыты.
 PROGRESS_FILE = os.path.join(DATA_DIR, "progress.json")
-LEVEL_SIZE = {"adj": 5, "num": 4, "verbs": 3}   # сколько слов (чисел, глаголов) в одном уровне карты
+LEVEL_SIZE = {"units": 1, "verbs": 3}   # сколько слов (чисел, глаголов) в одном уровне карты
 PASS_RATIO = 0.75                               # доля верных ответов, нужная для сдачи теста
 TEST_COOLDOWN = 30 * 60                         # после неудачи пересдача через 30 минут (секунды)
 TEST_OPTIONS = 3                                # вариантов ответа на вопрос теста
@@ -1863,80 +1934,74 @@ class Track:
             save_progress()
 
 
-class Deck(Track):
-    """Режим «слова дня»: слова уровня идут по одному в день, повторяются весь день в разных форматах."""
+def _today_iso():
+    return budapest_now().date().isoformat()
 
-    def __init__(self, key, tag, items, per_day, slot_seed=0, fmt_seed=0):
+
+class CourseTrack(Track):
+    """Слова и фразы по юнитам. Карточки повторяются по интервалам, юнит закрывается контрольной."""
+
+    def __init__(self, key, items, unit_ids):
         super().__init__(key, items)
-        self.tag = tag            # "w" / "n": начало callback_data и ключ отправленных слотов
-        self.per_day = per_day
-        self.slot_seed = slot_seed
-        self.fmt_seed = fmt_seed
+        self.levels = unit_ids
 
-    def _reset_level(self, s):
-        # новый уровень начинается сегодня же, с его первого слова
-        s["pos"], s["date"] = 0, budapest_now().date().isoformat()
+    def cards(self, uid):
+        with _prog_lock:
+            return prog(uid).setdefault("cards", {})      # {"номер карточки": {"box": 1..5, "due": "2026-11-06"}}
 
-    def _day_state(self, uid, day):
-        """Каждый новый день показываем следующее слово уровня."""
-        s = self.st(uid)
-        iso = day.isoformat()
-        s.setdefault("pos", 0)
-        if s.get("date") != iso:
-            if s.get("date") is not None and s["pos"] < len(self.current_ids(uid)):
-                s["pos"] += 1
-            s["date"] = iso
-            save_progress()
-        return s
+    def introduced(self, uid):
+        return {int(i) for i in self.cards(uid)}
+
+    def learned_ids(self, uid):
+        return sorted(int(i) for i, c in self.cards(uid).items() if c["box"] >= LEARNED_BOX)
+
+    def seen_ids(self, uid):
+        return sorted(self.introduced(uid) | set(self.current_ids(uid)))
+
+    def new_ids(self, uid):
+        seen = self.introduced(uid)
+        return [i for i in self.current_ids(uid) if i not in seen]
 
     def test_ready(self, uid):
-        ids = self.current_ids(uid)
-        return bool(ids) and self.st(uid).get("pos", 0) >= len(ids)
+        return bool(self.current_ids(uid)) and not self.new_ids(uid)
 
-    def user_item(self, uid, day):
-        """Слово дня. Когда слова уровня кончились, повторяем их (сначала те, что не получились)."""
+    def fail_level(self, uid, wrong_ids):
+        super().fail_level(uid, wrong_ids)
         with _prog_lock:
-            ids = self.current_ids(uid)
-            if not ids:                       # все уровни пройдены: любое слово для повторения
-                return random.choice(self.items)
-            s = self._day_state(uid, day)
-            if s["pos"] < len(ids):
-                return self.items[ids[s["pos"]]]
-            pool = [i for i in s["missed"] if i in ids] or ids
-            return self.items[random.choice(pool)]
+            cs = self.cards(uid)
+            for i in wrong_ids:
+                if str(i) in cs:
+                    cs[str(i)] = {"box": 1, "due": _today_iso()}     # не получилось: возвращаем в повтор
+            save_progress()
 
-    def skip(self, uid, day):
-        """«Знаю это слово»: к следующему слову уровня. None, если слова кончились и пора на тест."""
+    # ---- интервальное повторение
+    def introduce(self, uid, ids, today):
         with _prog_lock:
-            ids = self.current_ids(uid)
-            if not ids:
-                return random.choice(self.items)
-            s = self._day_state(uid, day)
-            if s["pos"] < len(ids):
-                s["pos"] += 1
-                save_progress()
-            if s["pos"] >= len(ids):
-                return None
-            return self.items[ids[s["pos"]]]
+            cs = self.cards(uid)
+            for i in ids:
+                cs.setdefault(str(i), {"box": 1, "due": (today + timedelta(days=1)).isoformat()})
+            nd = prog(uid).get("new_day") or {}
+            n = nd.get("n", 0) if nd.get("date") == today.isoformat() else 0
+            prog(uid)["new_day"] = {"date": today.isoformat(), "n": n + len(ids)}
+            save_progress()
 
-    def review_item(self, uid):
-        ids = self.learned_ids(uid)
-        return self.items[random.choice(ids)] if ids else None
+    def new_today(self, uid, today):
+        nd = prog(uid).get("new_day") or {}
+        return nd.get("n", 0) if nd.get("date") == today.isoformat() else 0
 
-    def base_slots(self, day):
-        """Время сообщений на день: случайное, но одинаковое после перезапуска. Минуты от полуночи."""
-        rnd = random.Random(day.toordinal() * 7919 + self.slot_seed)
-        span = WORD_END - WORD_START
-        n = self.per_day
-        free = span - (n - 1) * WORD_MIN_GAP
-        cuts = sorted(rnd.randint(0, free) for _ in range(n))
-        return [WORD_START + c + i * WORD_MIN_GAP for i, c in enumerate(cuts)]
+    def due_ids(self, uid, today):
+        iso = today.isoformat()
+        rows = [(c["due"], c["box"], int(i)) for i, c in self.cards(uid).items() if c["due"] <= iso]
+        return [i for _, _, i in sorted(rows)]
 
-    def fmt(self, day, i):
-        rnd = random.Random(day.toordinal() * 104729 + i + self.fmt_seed)
-        names = [f for f, _ in WORD_FORMATS]
-        weights = [w for _, w in WORD_FORMATS]
-        return rnd.choices(names, weights)[0]
+    def schedule(self, uid, idx, right, today):
+        with _prog_lock:
+            c = self.cards(uid).get(str(idx))
+            if c is None:
+                return
+            c["box"] = min(MAX_BOX, c["box"] + 1) if right else 1
+            c["due"] = (today + timedelta(days=INTERVALS[c["box"]])).isoformat()
+            save_progress()
 
 
 class VerbTrack(Track):
@@ -1972,14 +2037,13 @@ class VerbTrack(Track):
         s["done"] = [d for d in s["done"] if d not in s["missed"]]
 
 
-ADJ = Deck("adj", "w", WORDS, WORDS_PER_DAY)
-NUM = Deck("num", "n", NUMBERS, NUMBERS_PER_DAY, slot_seed=31337, fmt_seed=5000)
+
+UNITS_TRACK = CourseTrack("units", CARDS, UNIT_IDS)
 VTRACK = VerbTrack("verbs", VERBS_DATABASE)
-DECKS = {"adj": ADJ, "num": NUM}                  # порядок = порядок кнопок в настройках
-DECK_BY_TAG = {d.tag: d for d in DECKS.values()}
-TRACKS = {"adj": ADJ, "num": NUM, "verbs": VTRACK}
-TRACK_ORDER = ["adj", "num", "verbs"]
+TRACKS = {"units": UNITS_TRACK, "verbs": VTRACK}
+TRACK_ORDER = ["units", "verbs"]
 TOTAL_WORDS = sum(len(t.items) for t in TRACKS.values())
+
 
 
 # ---------- выученные слова и достижения
@@ -2085,12 +2149,61 @@ PT = {
         "review": "Review",
     },
 }
+PT["ru"].update({
+    "cards_of": "карточек {n} из {t}", "due_now": "🔁 К повтору сейчас: {n}", "not_ready": "Сначала пройди все карточки урока: жми ▶️ Урок.",
+    "lesson_head": "▶️ {unit} · карточка {i} из {n}", "btn_next": "➡️ Дальше", "btn_check": "✅ Проверим", "btn_lesson": "▶️ Начать урок",
+    "btn_review": "🔁 Повторить", "quiz_head": "Проверим · {i} из {n}", "review_head": "🔁 Повтор · {i} из {n}",
+    "lesson_done": "Урок окончен ✅ Новых карточек: {n}. Завтра они вернутся в повторе: так запоминается лучше всего.",
+    "lesson_limit": "На сегодня хватит новых слов ({n}). Дай им улечься: завтра они вернутся в повторе 🔁",
+    "lesson_all": "Все юниты пройдены 🏁 Теперь только повтор.", "review_none": "Сейчас повторять нечего 🎉 Новые слова: ▶️ Урок.",
+    "review_done": "Повтор окончен: {r} из {n} с первого раза.", "review_more": "Ещё карточек к повтору: {n}",
+    "remind_lesson": "🌅 Урок дня: «{unit}». Пара минут, и новые слова твои.", "remind_review": "🔁 Пора повторить: карточек {n}",
+    "mode_lesson": "🌅 Урок дня утром", "mode_rev": "🔁 Напоминания о повторе",
+    "modes_head": "Что присылать в течение дня?\n✅ включено, ⬜ выключено",
+})
+PT["uk"].update({
+    "cards_of": "карток {n} з {t}", "due_now": "🔁 До повторення зараз: {n}", "not_ready": "Спочатку пройди всі картки уроку: тисни ▶️ Урок.",
+    "lesson_head": "▶️ {unit} · картка {i} з {n}", "btn_next": "➡️ Далі", "btn_check": "✅ Перевіримо", "btn_lesson": "▶️ Почати урок",
+    "btn_review": "🔁 Повторити", "quiz_head": "Перевіримо · {i} з {n}", "review_head": "🔁 Повтор · {i} з {n}",
+    "lesson_done": "Урок закінчено ✅ Нових карток: {n}. Завтра вони повернуться в повторі: так запам'ятовується найкраще.",
+    "lesson_limit": "На сьогодні досить нових слів ({n}). Дай їм відлежатись: завтра вони повернуться в повторі 🔁",
+    "lesson_all": "Усі юніти пройдено 🏁 Тепер тільки повтор.", "review_none": "Зараз повторювати нічого 🎉 Нові слова: ▶️ Урок.",
+    "review_done": "Повтор закінчено: {r} з {n} з першого разу.", "review_more": "Ще карток до повторення: {n}",
+    "remind_lesson": "🌅 Урок дня: «{unit}». Пара хвилин, і нові слова твої.", "remind_review": "🔁 Час повторити: карток {n}",
+    "mode_lesson": "🌅 Урок дня зранку", "mode_rev": "🔁 Нагадування про повтор",
+    "modes_head": "Що надсилати протягом дня?\n✅ увімкнено, ⬜ вимкнено",
+})
+PT["en"].update({
+    "cards_of": "cards {n} of {t}", "due_now": "🔁 Due for review now: {n}", "not_ready": "First go through all the cards of this lesson: tap ▶️ Lesson.",
+    "lesson_head": "▶️ {unit} · card {i} of {n}", "btn_next": "➡️ Next", "btn_check": "✅ Let's check", "btn_lesson": "▶️ Start lesson",
+    "btn_review": "🔁 Review", "quiz_head": "Quick check · {i} of {n}", "review_head": "🔁 Review · {i} of {n}",
+    "lesson_done": "Lesson done ✅ New cards: {n}. They come back tomorrow in review: that's what makes them stick.",
+    "lesson_limit": "That's enough new words for today ({n}). Let them settle: they come back tomorrow in review 🔁",
+    "lesson_all": "All units complete 🏁 Review only from now on.", "review_none": "Nothing to review right now 🎉 New words: ▶️ Lesson.",
+    "review_done": "Review done: {r} of {n} right the first time.", "review_more": "More cards due: {n}",
+    "remind_lesson": "🌅 Lesson of the day: “{unit}”. A couple of minutes and the new words are yours.", "remind_review": "🔁 Time to review: {n} cards",
+    "mode_lesson": "🌅 Morning lesson", "mode_rev": "🔁 Review reminders",
+    "modes_head": "What should I send during the day?\n✅ on, ⬜ off",
+})
+# тексты тестов теперь про юниты: без слова «уровень»
+for _lg, _old_inv, _new_inv, _old_head, _new_head in (
+    ("ru", "🎯 Контрольная: {name}, уровень {n}", "🎯 Контрольная: {name}", "🎯 {name} · уровень {n}", "🎯 {name}"),
+    ("uk", "🎯 Контрольна: {name}, рівень {n}", "🎯 Контрольна: {name}", "🎯 {name} · рівень {n}", "🎯 {name}"),
+    ("en", "🎯 Test: {name}, level {n}", "🎯 Test: {name}", "🎯 {name} · level {n}", "🎯 {name}"),
+):
+    PT[_lg]["invite"] = PT[_lg]["invite"].replace(_old_inv, _new_inv)
+    PT[_lg]["test_head"] = _new_head
+PT["ru"].update({"pass": "✅ Тест сдан: {s} из {n}! Пройдено: {l}.", "pass_words": "Открыт следующий юнит: {l}. Жми ▶️ Урок.",
+                 "fail_words": "Эти карточки вернулись в повтор: загляни в 🔁 Повтор."})
+PT["uk"].update({"pass": "✅ Тест здано: {s} з {n}! Пройдено: {l}.", "pass_words": "Відкрито наступний юніт: {l}. Тисни ▶️ Урок.",
+                 "fail_words": "Ці картки повернулися в повтор: зазирни в 🔁 Повтор."})
+PT["en"].update({"pass": "✅ Test passed: {s} of {n}! Completed: {l}.", "pass_words": "Next unit is open: {l}. Tap ▶️ Lesson.",
+                 "fail_words": "These cards are back in review: check 🔁 Review."})
 TRACK_NAMES = {
-    "adj": {"ru": "Прилагательные", "uk": "Прикметники", "en": "Adjectives"},
-    "num": {"ru": "Числа", "uk": "Числа", "en": "Numbers"},
+    "units": {"ru": "Слова и фразы", "uk": "Слова і фрази", "en": "Words & phrases"},
     "verbs": {"ru": "Глаголы", "uk": "Дієслова", "en": "Verbs"},
 }
-TRACK_ICONS = {"adj": "🌿", "num": "🔢", "verbs": "🏃"}
+TRACK_ICONS = {"units": "📚", "verbs": "🏃"}
 MAP_NAMES = {"ru": "Карта", "uk": "Карта", "en": "Map"}
 PROFILE_NAMES = {"ru": "Профиль", "uk": "Профіль", "en": "Profile"}
 
@@ -2127,32 +2240,52 @@ def test_markup(lang, key):
     return kb
 
 
+def track_title(uid, key, lang):
+    if key == "units":
+        p = min(UNITS_TRACK.passed(uid), len(UNITS) - 1)
+        return f"{p + 1}. {unit_name(p, lang)}"
+    tr = TRACKS[key]
+    return f"{track_name(key, lang)} · {TXT(lang, 'level').format(n=tr.passed(uid) + 1, t=len(tr.levels))}"
+
+
 def map_text(uid, lang):
-    lines = [TXT(lang, "map_title"), ""]
-    for key in TRACK_ORDER:
-        tr = TRACKS[key]
-        p, n = tr.passed(uid), len(tr.levels)
-        status = TXT(lang, "track_done") if tr.finished(uid) else TXT(lang, "level").format(n=p + 1, t=n)
-        lines.append(f"{TRACK_ICONS[key]} {track_name(key, lang)}: {status}")
-        lines.append("".join("✅" if i < p else ("📍" if i == p else "🔒") for i in range(n)))
-        if not tr.finished(uid):
-            size = len(tr.current_ids(uid))
+    tr = UNITS_TRACK
+    p = tr.passed(uid)
+    intro = tr.introduced(uid)
+    lines = [TXT(lang, "map_title"), "", f"{TRACK_ICONS['units']} {track_name('units', lang)}"]
+    for ui, ids in enumerate(UNIT_IDS):
+        name = unit_name(ui, lang)
+        if ui < p:
+            lines.append(f"✅ {ui + 1}. {name}")
+        elif ui == p:
             if tr.test_ready(uid):
-                lines.append(TXT(lang, "test_ready"))
-            elif key == "verbs":
-                lines.append(TXT(lang, "verbs_progress").format(n=len(tr.st(uid)["done"]), t=size))
+                tail = TXT(lang, "test_ready")
             else:
-                lines.append(TXT(lang, "today").format(n=min(tr.st(uid).get("pos", 0), size - 1) + 1, t=size))
-        lines.append("")
+                tail = TXT(lang, "cards_of").format(n=sum(1 for i in ids if i in intro), t=len(ids))
+            lines.append(f"📍 {ui + 1}. {name} — {tail}")
+        else:
+            lines.append(f"🔒 {ui + 1}. {name}")
+    vt = VTRACK
+    n = len(vt.levels)
+    status = TXT(lang, "track_done") if vt.finished(uid) else TXT(lang, "level").format(n=vt.passed(uid) + 1, t=n)
+    lines += ["", f"{TRACK_ICONS['verbs']} {track_name('verbs', lang)}: {status}"]
+    if not vt.finished(uid):
+        if vt.test_ready(uid):
+            lines.append(TXT(lang, "test_ready"))
+        else:
+            lines.append(TXT(lang, "verbs_progress").format(n=len(vt.st(uid)["done"]), t=len(vt.current_ids(uid))))
     total = learned_total(uid)
-    lines.append(TXT(lang, "learned").format(n=total, t=TOTAL_WORDS))
-    nxt = next((n for n, _ in MILESTONES if n > total), None)
+    lines += ["", TXT(lang, "learned").format(n=total, t=TOTAL_WORDS)]
+    nxt = next((m for m, _ in MILESTONES if m > total), None)
     lines.append(TXT(lang, "next_ach").format(n=nxt - total) if nxt else TXT(lang, "all_ach"))
+    lines.append(TXT(lang, "due_now").format(n=len(UNITS_TRACK.due_ids(uid, budapest_now().date()))))
     return "\n".join(lines)
 
 
 def map_markup(uid, lang):
     kb = InlineKeyboardMarkup()
+    kb.row(InlineKeyboardButton(TXT(lang, "btn_lesson"), callback_data="ls:go"),
+           InlineKeyboardButton(TXT(lang, "btn_review"), callback_data="rs:go"))
     for key in TRACK_ORDER:
         tr = TRACKS[key]
         if not tr.finished(uid) and tr.test_ready(uid):
@@ -2175,6 +2308,7 @@ def profile_text(uid, lang):
     lines = [TXT(lang, "profile_title"), "", TXT(lang, "learned").format(n=total, t=TOTAL_WORDS)]
     for key in TRACK_ORDER:
         lines.append(f"   {TRACK_ICONS[key]} {track_name(key, lang)}: {counts[key]}/{len(TRACKS[key].items)}")
+    lines.append(TXT(lang, "due_now").format(n=len(UNITS_TRACK.due_ids(uid, budapest_now().date()))))
     lines += ["", TXT(lang, "ach_title")]
     for n, e in MILESTONES:
         lines.append(f"{e} {achievement_title(n, lang)}" if total >= n else f"🔒 {achievement_title(n, lang)}")
@@ -2189,7 +2323,7 @@ def send_test_invite(uid, key):
     lang = user_lang(uid)
     tr = TRACKS[key]
     bot.send_message(
-        uid, TXT(lang, "invite").format(name=track_name(key, lang), n=tr.passed(uid) + 1),
+        uid, TXT(lang, "invite").format(name=track_title(uid, key, lang), n=""),
         reply_markup=test_markup(lang, key),
     )
 
@@ -2199,28 +2333,34 @@ VERB_TEST_GROUPS = [["ő", "én", "te", "mi", "ők"], ["past", "past_te"], ["f_�
 VERB_TEST_KEYS = ["ő", "én", "te", "mi", "ők", "past", "f_én", "f_ők"]   # из них выбираем вопросы
 
 
+def card_question(uid, idx, lang, direction):
+    """Вопрос по карточке. direction "hu": показываем венгерский, выбрать перевод; "tr": наоборот."""
+    w = CARDS[idx]
+    to_hu = direction == "tr"
+    correct = w[0] if to_hu else tr_of(lang, w)
+    prompt = f"{tr_of(lang, w)} — ?" if to_hu else f"{w[0]} — ?"
+    seen = [i for i in UNITS_TRACK.seen_ids(uid) if i != idx]
+    rest = [i for i in range(len(CARDS)) if i != idx and i not in seen]
+    random.shuffle(seen)
+    random.shuffle(rest)
+    kind = CARD_KIND[idx]
+    cand = sorted(seen, key=lambda i: CARD_KIND[i] != kind) + sorted(rest, key=lambda i: CARD_KIND[i] != kind)
+    texts = []
+    for j in cand:
+        t = CARDS[j][0] if to_hu else tr_of(lang, CARDS[j])
+        if t != correct and t not in texts:
+            texts.append(t)
+        if len(texts) == TEST_OPTIONS - 1:
+            break
+    opts = texts + [correct]
+    random.shuffle(opts)
+    return {"id": idx, "q": prompt, "opts": opts, "ans": opts.index(correct), "dir": direction}
+
+
 def _word_questions(uid, deck, lang):
-    seen = deck.seen_ids(uid)
-    qs = []
-    for i in deck.current_ids(uid):
-        w = deck.items[i]
-        to_hu = random.random() < 0.5            # то перевод -> слово, то слово -> перевод
-        correct = w[0] if to_hu else tr_of(lang, w)
-        prompt = f"{tr_of(lang, w)} — ?" if to_hu else f"{w[0]} — ?"
-        cand = [j for j in seen if j != i]
-        random.shuffle(cand)
-        cand += [j for j in range(len(deck.items)) if j not in seen]    # запасной вариант: любые слова
-        texts = []
-        for j in cand:
-            t = deck.items[j][0] if to_hu else tr_of(lang, deck.items[j])
-            if t != correct and t not in texts:
-                texts.append(t)
-            if len(texts) == TEST_OPTIONS - 1:
-                break
-        opts = texts + [correct]
-        random.shuffle(opts)
-        qs.append({"id": i, "q": prompt, "opts": opts, "ans": opts.index(correct)})
-    return qs
+    ids = list(deck.current_ids(uid))
+    random.shuffle(ids)
+    return [card_question(uid, i, lang, random.choice(("hu", "tr"))) for i in ids[:8]]
 
 
 def _verb_questions(uid, lang):
@@ -2255,7 +2395,7 @@ def _question_view(uid, test, prefix=""):
     lang = user_lang(uid)
     tr = TRACKS[test["track"]]
     i, qs = test["i"], test["qs"]
-    head = TXT(lang, "test_head").format(name=track_name(test["track"], lang), n=tr.passed(uid) + 1)
+    head = TXT(lang, "test_head").format(name=track_title(uid, test["track"], lang), n="")
     text = f"{head}\n{TXT(lang, 'q_of').format(i=i + 1, n=len(qs))}\n\n{qs[i]['q']}"
     if prefix:
         text = f"{prefix}\n\n{text}"
@@ -2274,6 +2414,8 @@ def start_test(uid, chat_id, key):
     with _prog_lock:
         if tr.finished(uid):
             return TXT(lang, "no_test")
+        if not tr.test_ready(uid):
+            return TXT(lang, "not_ready")
         left = tr.wait_left(uid)
         if left > 0:
             return TXT(lang, "wait").format(m=max(1, (left + 59) // 60))
@@ -2307,7 +2449,7 @@ def finish_test(uid, chat_id):
         n, s = len(test["qs"]), test["score"]
         need = max(1, math.ceil(PASS_RATIO * n))
         ok = s >= need
-        level = tr.passed(uid) + 1
+        title_done = track_title(uid, key, lang)
         missed = sorted(set(test["wrong"]))
         if ok:
             tr.pass_level(uid)
@@ -2317,13 +2459,13 @@ def finish_test(uid, chat_id):
             new_ach = []
         last = tr.finished(uid)
     if ok:
-        parts = [TXT(lang, "pass").format(s=s, n=n, l=level)]
+        parts = [TXT(lang, "pass").format(s=s, n=n, l=title_done)]
         if last:
             parts.append(TXT(lang, "pass_last"))
         elif key == "verbs":
             parts.append(TXT(lang, "pass_verbs"))
         else:
-            parts.append(TXT(lang, "pass_words").format(l=level + 1))
+            parts.append(TXT(lang, "pass_words").format(l=track_title(uid, key, lang)))
     else:
         parts = [TXT(lang, "fail").format(s=s, n=n, need=need)]
         parts += [f"• {_item_label(key, i, lang)}" for i in missed]
@@ -2430,64 +2572,10 @@ def on_profile_button(call):
         print(f"Ошибка профиля: {e}")
 
 
-def day_slots(day):
-    """Расписание на день по режимам: {ключ режима: [минуты от полуночи]}.
-    Сообщения разных режимов не стоят вплотную: второй режим сдвигается от первого."""
-    result, taken = {}, []
-    for key, deck in DECKS.items():
-        slots = []
-        for m in deck.base_slots(day):
-            for _ in range(MODES_MIN_GAP * 2):
-                if all(abs(m - t) >= MODES_MIN_GAP for t in taken):
-                    break
-                m += 1
-            slots.append(m)
-        result[key] = slots
-        taken += slots
-    return result
-
-
-# ---------- какие режимы включены у пользователя (можно несколько сразу)
-MODES_FILE = os.path.join(DATA_DIR, "modes.json")
-
-
-def _load_modes():
-    try:
-        with open(MODES_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-_user_modes = _load_modes()   # {user_id: ["adj", "num"]}
-
-
-def _save_modes():
-    try:
-        with open(MODES_FILE, "w", encoding="utf-8") as f:
-            json.dump(_user_modes, f)
-    except Exception as e:
-        print(f"Не удалось сохранить modes.json: {e}")
-
-
-def user_modes(user_id):
-    return set(_user_modes.get(str(user_id), DEFAULT_MODES)) & set(DECKS)
-
-
-def toggle_mode(user_id, key):
-    """Включает или выключает режим. Возвращает True, если теперь он включён."""
-    modes = user_modes(user_id)
-    if key in modes:
-        modes.discard(key)
-    else:
-        modes.add(key)
-    _user_modes[str(user_id)] = [k for k in DECKS if k in modes]
-    _save_modes()
-    return key in modes
-
 
 def user_lang(user_id):
     return active_trainings.get(user_id, {}).get("lang") or "ru"
+
 
 
 # ---------- озвучка: венгерское произношение голосовым сообщением (кнопка 🔊)
@@ -2575,34 +2663,6 @@ def audio_fail_text(lang):
     return AUDIO_FAIL.get(lang, AUDIO_FAIL["en"])
 
 
-def audio_button(deck, w):
-    return InlineKeyboardButton(AUDIO_BTN, callback_data=f"au:{deck.tag}:{deck.index(w)}")
-
-
-def audio_markup(deck, w):
-    """Клавиатура только с кнопкой 🔊 (или None, если озвучка не подключена)."""
-    if edge_tts is None:
-        return None
-    kb = InlineKeyboardMarkup()
-    kb.row(audio_button(deck, w))
-    return kb
-
-
-CHANGE_BTN = {
-    "w": {"ru": "🔄 Знаю, другое слово", "uk": "🔄 Знаю, інше слово", "en": "🔄 I know it, next word"},
-    "n": {"ru": "🔄 Знаю, другое число", "uk": "🔄 Знаю, інше число", "en": "🔄 I know it, next number"},
-}
-
-
-def change_markup(lang, deck=ADJ, w=None):
-    """Кнопки под словом: 🔊 (если передано слово и озвучка подключена) и «Знаю, другое»."""
-    kb = InlineKeyboardMarkup()
-    if w is not None and edge_tts is not None:
-        kb.row(audio_button(deck, w))
-    btn = CHANGE_BTN[deck.tag]
-    kb.row(InlineKeyboardButton(btn.get(lang, btn["en"]), callback_data=f"{deck.tag}n"))
-    return kb
-
 
 def tr_of(lang, w):
     return w[1] if lang == "ru" else (w[2] if lang == "uk" else w[3])
@@ -2617,106 +2677,10 @@ def word_text(lang, w):
     return f"{w[0]} — {tr_of(lang, w)}"
 
 
-def number_example(lang, w):
-    """Фраза с числом: возраст для чисел до 100, цена в форинтах для остальных."""
-    n = int(w[1])
-    hu = w[0]
-    if n <= 100:
-        tr = {"ru": f"Мне {n} лет.", "uk": f"Мені {n} років.", "en": f"I'm {n} years old."}
-        return f"{hu[:1].upper()}{hu[1:]} éves vagyok.", tr.get(lang, tr["en"])
-    tr = {"ru": f"Это {n} форинтов.", "uk": f"Це {n} форинтів.", "en": f"This is {n} forints."}
-    return f"Ez {hu} forint.", tr.get(lang, tr["en"])
-
-
-MODE_LABELS = {
-    "adj": {"ru": "Прилагательные", "uk": "Прикметники", "en": "Adjectives"},
-    "num": {"ru": "Числа (20, 30, 50…)", "uk": "Числа (20, 30, 50…)", "en": "Numbers (20, 30, 50…)"},
-}
-MODES_HEAD = {
-    "ru": "Что присылать в течение дня? Можно включить оба режима сразу.\n✅ включено, ⬜ выключено",
-    "uk": "Що надсилати протягом дня? Можна увімкнути обидва режими одразу.\n✅ увімкнено, ⬜ вимкнено",
-    "en": "What should I send during the day? You can turn on both modes at once.\n✅ on, ⬜ off",
-}
-
-
-def mode_label(key, lang):
-    labels = MODE_LABELS[key]
-    return labels.get(lang, labels["en"])
-
-
-def modes_markup(user_id, lang):
-    on = user_modes(user_id)
-    kb = InlineKeyboardMarkup()
-    for key in DECKS:
-        mark = "✅" if key in on else "⬜"
-        kb.row(InlineKeyboardButton(f"{mark} {mode_label(key, lang)}", callback_data=f"md:{key}"))
-    return kb
-
-
-def show_modes(chat_id, user_id, lang):
-    bot.send_message(chat_id, MODES_HEAD.get(lang, MODES_HEAD["en"]), reply_markup=modes_markup(user_id, lang))
-
 
 def budapest_now():
     return datetime.now(BUDAPEST_TZ)
 
-
-@bot.message_handler(commands=["word"])
-def cmd_word(message):
-    uid = message.from_user.id
-    all_users.add(uid)
-    lang = user_lang(uid)
-    today = budapest_now().date()
-    modes = user_modes(uid) or {"adj"}   # по прямой просьбе показываем слово, даже если всё выключено
-    for key, deck in DECKS.items():
-        if key in modes:
-            w = deck.user_item(uid, today)
-            bot.send_message(message.chat.id, word_text(lang, w), reply_markup=change_markup(lang, deck, w))
-
-
-@bot.message_handler(commands=["newword"])
-def cmd_newword(message):
-    uid = message.from_user.id
-    all_users.add(uid)
-    lang = user_lang(uid)
-    w = ADJ.skip(uid, budapest_now().date())
-    if w is None:
-        send_test_invite(uid, "adj")
-        return
-    bot.send_message(message.chat.id, word_text(lang, w), reply_markup=change_markup(lang, ADJ, w))
-
-
-@bot.message_handler(commands=["modes"])
-def cmd_modes(message):
-    uid = message.from_user.id
-    all_users.add(uid)
-    show_modes(message.chat.id, uid, user_lang(uid))
-
-
-@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("md:"))
-def on_modes_callback(call):
-    try:
-        uid = call.from_user.id
-        key = call.data.split(":", 1)[1]
-        if key not in DECKS:
-            bot.answer_callback_query(call.id)
-            return
-        all_users.add(uid)
-        lang = user_lang(uid)
-        now_on = toggle_mode(uid, key)
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id,
-                                      reply_markup=modes_markup(uid, lang))
-        bot.answer_callback_query(call.id, f"{'✅' if now_on else '⬜'} {mode_label(key, lang)}")
-        if now_on:   # сразу показываем первое слово (число), чтобы было видно, что режим работает
-            deck = DECKS[key]
-            w = deck.user_item(uid, budapest_now().date())
-            bot.send_message(call.message.chat.id, word_text(lang, w), reply_markup=change_markup(lang, deck, w))
-    except Exception as e:
-        print(f"Ошибка переключения режима: {e}")
-        try:
-            bot.answer_callback_query(call.id)
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------- напоминания
@@ -2747,96 +2711,306 @@ def send_reminder(user_id, time_key):
         )
 
 
-def send_word(user_id, w, fmt="plain", day=None, deck=ADJ):
-    """Сообщение со словом (числом) дня. Без disable_notification: звук включён.
-    Клавиатура и тренировка не трогаются."""
-    lang = user_lang(user_id)
-    hu = w[0]
-    markup = change_markup(lang, deck, w)
-    if fmt == "spoiler":
-        bot.send_message(
-            user_id, f"{escape_markdown_v2(hu)} — ||{escape_markdown_v2(tr_of(lang, w))}||",
-            parse_mode="MarkdownV2", reply_markup=markup)
-    elif fmt == "quiz":
-        pool = [deck.items[i] for i in deck.seen_ids(user_id) if deck.items[i] != w]
-        pool += [x for x in deck.items if x != w and x not in pool]
-        others = pool[:2] if len(deck.seen_ids(user_id)) <= 2 else random.sample(pool[:max(2, len(deck.seen_ids(user_id)) - 1)], 2)
-        opts = others + [w]
-        random.shuffle(opts)
-        kb = InlineKeyboardMarkup()
-        kb.row(*[InlineKeyboardButton(o[0], callback_data=f"{deck.tag}q:{deck.index(w)}:{deck.index(o)}")
-                 for o in opts])
-        btn = CHANGE_BTN[deck.tag]
-        kb.row(InlineKeyboardButton(btn.get(lang, btn["en"]), callback_data=f"{deck.tag}n"))
-        bot.send_message(user_id, f"{tr_of(lang, w)} — ?", reply_markup=kb)
-    elif fmt == "example":
-        if deck.key == "num":
-            sent_hu, sent_tr = number_example(lang, w)
-            text = f"{hu} — {sent_hu}\n({sent_tr})"
-        else:
-            sent_hu = f"Nagyon {hu}."
-            pre = {"ru": "Очень", "uk": "Дуже", "en": "Very"}.get(lang, "Very")
-            text = f"{hu} — {sent_hu}\n({pre} {short_tr(lang, w)})"
-        bot.send_message(user_id, text, reply_markup=markup)
-    elif fmt == "big":
-        bot.send_message(user_id, f"*{escape_markdown_v2(hu.upper())}*", parse_mode="MarkdownV2",
-                         reply_markup=markup)
-    elif fmt == "old" and day is not None:
-        n = random.choice([1, 3, 7])
-        old = deck.review_item(user_id)
-        if old is None or old == w:
-            bot.send_message(user_id, word_text(lang, w), reply_markup=markup)
-        else:
-            label = TXT(lang, "review")
-            bot.send_message(user_id, f"{label}: {word_text(lang, old)}",
-                             reply_markup=change_markup(lang, deck, old))
-    else:
-        bot.send_message(user_id, word_text(lang, w), reply_markup=markup)
+
+LESSON_NAMES = {"ru": "Урок", "uk": "Урок", "en": "Lesson"}
+REVIEW_NAMES = {"ru": "Повтор", "uk": "Повтор", "en": "Review"}
 
 
-@bot.callback_query_handler(func=lambda c: c.data in ("wn", "nn"))
-def on_word_change(call):
+def lesson_label(lang):
+    return f"▶️ {LESSON_NAMES.get(lang) or LESSON_NAMES['en']}"
+
+
+def review_label(lang):
+    return f"🔁 {REVIEW_NAMES.get(lang) or REVIEW_NAMES['en']}"
+
+
+LESSON_BTNS = {lesson_label(lg).replace("\ufe0f", "") for lg in MENU_TXT}
+REVIEW_BTNS = {review_label(lg).replace("\ufe0f", "") for lg in MENU_TXT}
+
+
+def audio_markup(idx):
+    """Клавиатура только с кнопкой 🔊 (или None, если озвучка не подключена)."""
+    if edge_tts is None:
+        return None
+    kb = InlineKeyboardMarkup()
+    kb.row(audio_button(idx))
+    return kb
+
+
+# ---------------------------------------------------------------- урок и повтор
+def audio_button(idx):
+    return InlineKeyboardButton(AUDIO_BTN, callback_data=f"au:c:{idx}")
+
+
+def lesson_view(uid):
+    lang = user_lang(uid)
+    st = prog(uid)["lesson"]
+    ids, i = st["ids"], st["i"]
+    w = CARDS[ids[i]]
+    unit = unit_name(UNIT_OF_CARD[ids[i]], lang)
+    text = f"{TXT(lang, 'lesson_head').format(unit=unit, i=i + 1, n=len(ids))}\n\n{w[0]}\n{tr_of(lang, w)}"
+    kb = InlineKeyboardMarkup()
+    if edge_tts is not None:
+        kb.row(audio_button(ids[i]))
+    kb.row(InlineKeyboardButton(TXT(lang, "btn_check" if i == len(ids) - 1 else "btn_next"), callback_data="ls:next"))
+    return text, kb
+
+
+def start_lesson(uid, chat_id):
+    lang = user_lang(uid)
+    tr = UNITS_TRACK
+    today = budapest_now().date()
+    if tr.finished(uid):
+        bot.send_message(chat_id, TXT(lang, "lesson_all"))
+        return
+    if tr.test_ready(uid):
+        send_test_invite(uid, "units")
+        return
+    left = NEW_PER_DAY - tr.new_today(uid, today)
+    if left <= 0:
+        bot.send_message(chat_id, TXT(lang, "lesson_limit").format(n=NEW_PER_DAY))
+        return
+    ids = tr.new_ids(uid)[: min(LESSON_SIZE, left)]
+    prog(uid)["lesson"] = {"ids": ids, "i": 0}
+    save_progress()
+    text, kb = lesson_view(uid)
+    bot.send_message(chat_id, text, reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "ls:go")
+def on_lesson_go(call):
     try:
         uid = call.from_user.id
-        deck = DECK_BY_TAG[call.data[0]]
-        lang = user_lang(uid)
-        new = deck.skip(uid, budapest_now().date())
-        if new is None:       # слова уровня закончились: пора на контрольную
-            bot.answer_callback_query(call.id, "🎯")
-            send_test_invite(uid, deck.key)
-            return
-        bot.edit_message_text(word_text(lang, new), call.message.chat.id, call.message.message_id,
-                              reply_markup=change_markup(lang, deck, new))
-        bot.answer_callback_query(call.id, "🔄")
+        all_users.add(uid)
+        bot.answer_callback_query(call.id)
+        start_lesson(uid, call.message.chat.id)
     except Exception as e:
-        print(f"Ошибка смены слова: {e}")
+        print(f"Ошибка запуска урока: {e}")
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "ls:next")
+def on_lesson_next(call):
+    uid = call.from_user.id
+    lang = user_lang(uid)
+    try:
+        st = prog(uid).get("lesson")
+        if not st:
+            bot.answer_callback_query(call.id, TXT(lang, "stale"))
+            return
+        bot.answer_callback_query(call.id)
+        chat_id, mid = call.message.chat.id, call.message.message_id
+        st["i"] += 1
+        if st["i"] < len(st["ids"]):
+            text, kb = lesson_view(uid)
+            bot.edit_message_text(text, chat_id, mid, reply_markup=kb)
+            return
+        ids = st["ids"]
+        prog(uid)["lesson"] = None
+        UNITS_TRACK.introduce(uid, ids, budapest_now().date())
+        bot.edit_message_reply_markup(chat_id, mid, reply_markup=None)
+        random.shuffle(ids)
+        start_session(uid, chat_id, "quiz", ids)
+    except Exception as e:
+        print(f"Ошибка урока: {e}")
         try:
             bot.answer_callback_query(call.id)
         except Exception:
             pass
 
 
-@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith(("wq:", "nq:")))
-def on_word_quiz(call):
+def _review_direction(uid, idx):
+    box = UNITS_TRACK.cards(uid).get(str(idx), {}).get("box", 1)
+    return "hu" if box <= 2 else "tr"       # сначала узнаём слово, потом вспоминаем его сами
+
+
+def start_session(uid, chat_id, kind, ids):
+    lang = user_lang(uid)
+    qs = [card_question(uid, i, lang, random.choice(("hu", "tr")) if kind == "quiz" else _review_direction(uid, i))
+          for i in ids]
+    prog(uid)["sess"] = {"kind": kind, "qs": qs, "i": 0, "right": 0, "total": len(qs), "retried": []}
+    save_progress()
+    text, kb = _sess_view(uid, prog(uid)["sess"])
+    bot.send_message(chat_id, text, reply_markup=kb)
+
+
+def _sess_view(uid, s, prefix=""):
+    lang = user_lang(uid)
+    q = s["qs"][s["i"]]
+    head = TXT(lang, "quiz_head" if s["kind"] == "quiz" else "review_head").format(i=s["i"] + 1, n=len(s["qs"]))
+    text = f"{head}\n\n{q['q']}"
+    if prefix:
+        text = f"{prefix}\n\n{text}"
+    kb = InlineKeyboardMarkup()
+    if q["dir"] == "hu" and edge_tts is not None:
+        kb.row(audio_button(q["id"]))
+    for oi, o in enumerate(q["opts"]):
+        kb.row(InlineKeyboardButton(o, callback_data=f"rv:{s['i']}:{oi}"))
+    return text, kb
+
+
+def start_review(uid, chat_id):
+    lang = user_lang(uid)
+    ids = UNITS_TRACK.due_ids(uid, budapest_now().date())[:REVIEW_BATCH]
+    if not ids:
+        bot.send_message(chat_id, TXT(lang, "review_none"))
+        return
+    start_session(uid, chat_id, "review", ids)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "rs:go")
+def on_review_go(call):
     try:
-        deck = DECK_BY_TAG[call.data[0]]
-        _, wi, oi = call.data.split(":")
-        w, o = deck.items[int(wi)], deck.items[int(oi)]
-        lang = user_lang(call.from_user.id)
-        if w == o:
-            bot.edit_message_text(f"✅ {word_text(lang, w)}", call.message.chat.id, call.message.message_id,
-                                  reply_markup=audio_markup(deck, w))
-            bot.answer_callback_query(call.id, "✅")
-        else:
-            kb = InlineKeyboardMarkup()
-            for r in call.message.reply_markup.keyboard:
-                row = [b for b in r if b.callback_data != call.data]
-                if row:
-                    kb.row(*row)
-            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=kb)
-            bot.answer_callback_query(call.id, "❌")
+        uid = call.from_user.id
+        all_users.add(uid)
+        bot.answer_callback_query(call.id)
+        start_review(uid, call.message.chat.id)
     except Exception as e:
-        print(f"Ошибка quiz слова: {e}")
+        print(f"Ошибка запуска повтора: {e}")
+
+
+def finish_session(uid, chat_id, s):
+    lang = user_lang(uid)
+    today = budapest_now().date()
+    prog(uid)["sess"] = None
+    save_progress()
+    if s["kind"] == "quiz":
+        bot.send_message(chat_id, TXT(lang, "lesson_done").format(n=s["total"]))
+        if UNITS_TRACK.test_ready(uid):
+            send_test_invite(uid, "units")
+        return
+    bot.send_message(chat_id, TXT(lang, "review_done").format(r=s["right"], n=s["total"]))
+    for n_words, emoji in check_achievements(uid):
+        bot.send_message(chat_id, TXT(lang, "ach_unlock").format(title=f"{emoji} {achievement_title(n_words, lang)}"))
+    more = len(UNITS_TRACK.due_ids(uid, today))
+    if more:
+        kb = InlineKeyboardMarkup()
+        kb.row(InlineKeyboardButton(TXT(lang, "btn_review"), callback_data="rs:go"))
+        bot.send_message(chat_id, TXT(lang, "review_more").format(n=more), reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("rv:"))
+def on_session_answer(call):
+    uid = call.from_user.id
+    lang = user_lang(uid)
+    try:
+        _, i_s, o_s = call.data.split(":")
+        i, o = int(i_s), int(o_s)
+        s = prog(uid).get("sess")
+        if not s or s["i"] != i or not 0 <= o < len(s["qs"][i]["opts"]):
+            bot.answer_callback_query(call.id, TXT(lang, "stale"))
+            return
+        q = s["qs"][i]
+        right = o == q["ans"]
+        first = q["id"] not in s["retried"]
+        today = budapest_now().date()
+        if s["kind"] == "review" and first:
+            UNITS_TRACK.schedule(uid, q["id"], right, today)
+            if not right:
+                s["retried"].append(q["id"])      # ошибся: спросим ещё раз в конце
+                s["qs"].append(card_question(uid, q["id"], lang, q["dir"]))
+        if right and first:
+            s["right"] += 1
+        s["i"] += 1
+        correct = q["opts"][q["ans"]]
+        line = f"✅ {correct}" if right else f"❌ {q['opts'][o]} → ✅ {correct}"
+        done = s["i"] >= len(s["qs"])
+        save_progress()
+        bot.answer_callback_query(call.id, "✅" if right else "❌")
+        chat_id, mid = call.message.chat.id, call.message.message_id
+        if done:
+            bot.edit_message_text(line, chat_id, mid, reply_markup=audio_markup(q["id"]))
+            finish_session(uid, chat_id, s)
+        else:
+            text, kb = _sess_view(uid, s, line)
+            bot.edit_message_text(text, chat_id, mid, reply_markup=kb)
+    except Exception as e:
+        print(f"Ошибка ответа в сессии: {e}")
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
+
+
+@bot.message_handler(commands=["lesson", "word"])
+def cmd_lesson(message):
+    uid = message.from_user.id
+    all_users.add(uid)
+    start_lesson(uid, message.chat.id)
+
+
+@bot.message_handler(commands=["review"])
+def cmd_review(message):
+    uid = message.from_user.id
+    all_users.add(uid)
+    start_review(uid, message.chat.id)
+
+
+# ---------- что присылать в течение дня (две галочки)
+REM_FILE = os.path.join(DATA_DIR, "reminders.json")
+MODE_KEYS = ["lesson", "rev"]
+
+
+def _load_rem():
+    try:
+        with open(REM_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+_rem = _load_rem()   # {user_id: {"lesson": bool, "rev": bool}}; по умолчанию всё включено
+
+
+def rem_on(uid, key):
+    return _rem.get(str(uid), {}).get(key, True)
+
+
+def toggle_rem(uid, key):
+    d = _rem.setdefault(str(uid), {})
+    d[key] = not rem_on(uid, key)
+    try:
+        with open(REM_FILE, "w", encoding="utf-8") as f:
+            json.dump(_rem, f)
+    except Exception as e:
+        print(f"Не удалось сохранить reminders.json: {e}")
+    return d[key]
+
+
+def modes_markup(uid, lang):
+    kb = InlineKeyboardMarkup()
+    for key in MODE_KEYS:
+        kb.row(InlineKeyboardButton(f"{'✅' if rem_on(uid, key) else '⬜'} {TXT(lang, 'mode_' + key)}",
+                                    callback_data=f"md:{key}"))
+    return kb
+
+
+def show_modes(chat_id, uid, lang):
+    bot.send_message(chat_id, TXT(lang, "modes_head"), reply_markup=modes_markup(uid, lang))
+
+
+@bot.message_handler(commands=["modes"])
+def cmd_modes(message):
+    uid = message.from_user.id
+    all_users.add(uid)
+    show_modes(message.chat.id, uid, user_lang(uid))
+
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("md:"))
+def on_modes_callback(call):
+    try:
+        uid = call.from_user.id
+        key = call.data.split(":", 1)[1]
+        if key not in MODE_KEYS:
+            bot.answer_callback_query(call.id)
+            return
+        all_users.add(uid)
+        lang = user_lang(uid)
+        now_on = toggle_rem(uid, key)
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id,
+                                      reply_markup=modes_markup(uid, lang))
+        bot.answer_callback_query(call.id, f"{'✅' if now_on else '⬜'} {TXT(lang, 'mode_' + key)}")
+    except Exception as e:
+        print(f"Ошибка переключения: {e}")
         try:
             bot.answer_callback_query(call.id)
         except Exception:
@@ -2847,8 +3021,10 @@ def on_word_quiz(call):
 def on_audio(call):
     try:
         _, tag, idx = call.data.split(":")
-        w = DECK_BY_TAG[tag].items[int(idx)]
-        if send_speech(call.message.chat.id, w[0]):
+        if tag != "c":                       # старые кнопки из прежней версии бота
+            bot.answer_callback_query(call.id)
+            return
+        if send_speech(call.message.chat.id, CARDS[int(idx)][0]):
             bot.answer_callback_query(call.id)
         else:
             bot.answer_callback_query(call.id, audio_fail_text(user_lang(call.from_user.id)))
@@ -2860,12 +3036,32 @@ def on_audio(call):
             pass
 
 
+OLD_BTN_HINT = {"ru": "Режим слов обновился: жми ▶️ Урок и 🔁 Повтор внизу.",
+                "uk": "Режим слів оновився: тисни ▶️ Урок і 🔁 Повтор внизу.",
+                "en": "Word mode was updated: use ▶️ Lesson and 🔁 Review below."}
+
+
+@bot.callback_query_handler(func=lambda c: c.data in ("wn", "nn") or (c.data or "").startswith(("wq:", "nq:")))
+def on_old_word_buttons(call):
+    """Кнопки из сообщений прежнего «слова дня»: объясняем, что теперь есть уроки."""
+    try:
+        bot.answer_callback_query(call.id, OLD_BTN_HINT.get(user_lang(call.from_user.id), OLD_BTN_HINT["en"]), show_alert=True)
+    except Exception:
+        pass
+
+
+# ---------- расписание дня: урок утром, три напоминания о повторе, приглашения на контрольную
+LESSON_REMIND_MIN = 9 * 60 + 30
+REVIEW_REMIND_MINS = [11 * 60, 15 * 60 + 30, 20 * 60]
+REMIND_WINDOW = 90        # если бот был выключен, опоздавшее напоминание отправляем не позже чем через 90 минут
+
+
 def scheduler_tick(now):
     today = now.date()
     for k in [k for k in _sent if k[0] != today]:
         _sent.discard(k)
 
-    # обычные напоминания (утро, день, вечер)
+    # обычные напоминания Réka (утро, день, вечер)
     h = now.hour
     if h in REMIND_HOURS and now.minute < 30 and (today, "r", h) not in _sent:
         _sent.add((today, "r", h))
@@ -2876,40 +3072,42 @@ def scheduler_tick(now):
                 print(f"Ошибка напоминания {user_id}: {e}")
             time.sleep(0.05)
 
-    # слово дня: каждый режим крутится весь день (одно слово или число), форматы чередуются.
-    # Сообщения получают только те, у кого этот режим включён: можно включить оба сразу.
     now_min = now.hour * 60 + now.minute
-    for key, slots in day_slots(today).items():
-        deck = DECKS[key]
-        for i, m in enumerate(slots):
-            if 0 <= now_min - m < 20 and (today, deck.tag, i) not in _sent:
-                _sent.add((today, deck.tag, i))
-                fmt = deck.fmt(today, i)
-                for user_id in list(all_users):
-                    if key not in user_modes(user_id):
+    for uid in list(all_users):
+        lang = user_lang(uid)
+        try:
+            # утренний урок: если сегодня ещё не учили новое
+            if (0 <= now_min - LESSON_REMIND_MIN < REMIND_WINDOW and rem_on(uid, "lesson")
+                    and (today, "li", uid) not in _sent):
+                tr = UNITS_TRACK
+                if not tr.finished(uid) and not tr.test_ready(uid) and tr.new_today(uid, today) == 0:
+                    _sent.add((today, "li", uid))
+                    kb = InlineKeyboardMarkup()
+                    kb.row(InlineKeyboardButton(TXT(lang, "btn_lesson"), callback_data="ls:go"))
+                    unit = unit_name(min(tr.passed(uid), len(UNITS) - 1), lang)
+                    bot.send_message(uid, TXT(lang, "remind_lesson").format(unit=unit), reply_markup=kb)
+            # напоминания о повторе: только если есть что повторять
+            for slot in REVIEW_REMIND_MINS:
+                if 0 <= now_min - slot < REMIND_WINDOW and rem_on(uid, "rev") and (today, "rv", slot, uid) not in _sent:
+                    n = len(UNITS_TRACK.due_ids(uid, today))
+                    if n >= (1 if slot == REVIEW_REMIND_MINS[-1] else 3):
+                        _sent.add((today, "rv", slot, uid))
+                        kb = InlineKeyboardMarkup()
+                        kb.row(InlineKeyboardButton(TXT(lang, "btn_review"), callback_data="rs:go"))
+                        bot.send_message(uid, TXT(lang, "remind_review").format(n=n), reply_markup=kb)
+            # приглашение на контрольную: раз в день после 12:00
+            if now_min >= 12 * 60:
+                for key in TRACK_ORDER:
+                    tr = TRACKS[key]
+                    if key == "verbs" and "verbs" not in prog(uid)["tracks"]:
                         continue
-                    try:
-                        send_word(user_id, deck.user_item(user_id, today), fmt, today, deck)
-                    except Exception as e:
-                        print(f"Ошибка слова дня ({key}) {user_id}: {e}")
-                    time.sleep(0.05)
-
-    # приглашение на контрольную: раз в день после 12:00, если все слова уровня показаны
-    if now_min >= 12 * 60:
-        for user_id in list(all_users):
-            for key in TRACK_ORDER:
-                tr = TRACKS[key]
-                if key in DECKS and key not in user_modes(user_id):
-                    continue
-                if key == "verbs" and "verbs" not in prog(user_id)["tracks"]:
-                    continue
-                if tr.finished(user_id) or not tr.test_ready(user_id) or (today, "ti", key, user_id) in _sent:
-                    continue
-                _sent.add((today, "ti", key, user_id))
-                try:
-                    send_test_invite(user_id, key)
-                except Exception as e:
-                    print(f"Ошибка приглашения на тест {user_id}: {e}")
+                    if tr.finished(uid) or not tr.test_ready(uid) or (today, "ti", key, uid) in _sent:
+                        continue
+                    _sent.add((today, "ti", key, uid))
+                    send_test_invite(uid, key)
+        except Exception as e:
+            print(f"Ошибка расписания {uid}: {e}")
+        time.sleep(0.02)
 
 
 def daily_reminders_loop():
@@ -2972,6 +3170,14 @@ def handle_all_messages(message):
             l_data["choose_btn"],
             reply_markup=get_verbs_keyboard(lang, recent, user_id),
         )
+        return
+
+    # --- урок и повтор
+    if text.replace("\ufe0f", "") in LESSON_BTNS and "verb" not in data:
+        start_lesson(user_id, message.chat.id)
+        return
+    if text.replace("\ufe0f", "") in REVIEW_BTNS and "verb" not in data:
+        start_review(user_id, message.chat.id)
         return
 
     # --- карта и профиль
@@ -3069,12 +3275,12 @@ def handle_all_messages(message):
 try:   # меню команд (кнопка «/» рядом с полем ввода)
     from telebot.types import BotCommand
     bot.set_my_commands([
-        BotCommand("word", "Слово дня"),
-        BotCommand("newword", "Другое слово дня"),
-        BotCommand("modes", "Режимы: прилагательные и числа"),
+        BotCommand("lesson", "Урок: новые слова"),
+        BotCommand("review", "Повтор слов"),
         BotCommand("map", "Карта прогресса"),
         BotCommand("test", "Контрольный тест"),
         BotCommand("profile", "Профиль и достижения"),
+        BotCommand("modes", "Что присылать в течение дня"),
         BotCommand("menu", "Главное меню"),
     ])
 except Exception as e:
@@ -3090,3 +3296,4 @@ while True:
     except Exception as e:
         print(f"Ошибка: {e}")
         time.sleep(5)
+
