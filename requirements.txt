@@ -1,3 +1,4 @@
 pytelegrambotapi
 groq
 apscheduler
+edge-tts
