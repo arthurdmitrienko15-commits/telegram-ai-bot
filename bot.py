@@ -1209,9 +1209,11 @@ def modes_label(lang):
     return f"⚙️ {MODES_NAMES.get(lang) or MODES_NAMES['en']}"
 
 
-def main_keyboard(lang):
-    """Своей нижней клавиатуры больше нет: всё приходит само, команды в кнопке «Меню» Telegram."""
-    return ReplyKeyboardRemove()
+def main_keyboard(lang, uid=None):
+    """Внизу одна кнопка «➡️ Дальше» (её можно выключить в /settings)."""
+    if uid is not None and not U(uid)["next_btn"]:
+        return ReplyKeyboardRemove()
+    return next_keyboard(lang)
 
 
 def exit_to_menu(chat_id, user_id):
@@ -1231,7 +1233,7 @@ def exit_to_menu(chat_id, user_id):
     bot.send_message(
         chat_id,
         f"{random.choice(KAO_DONE)} {main_prompt(lang)}",
-        reply_markup=main_keyboard(lang),
+        reply_markup=main_keyboard(lang, user_id),
     )
 
 
@@ -1612,7 +1614,7 @@ def cmd_start(message):
         new_state(user_id, current_lang)
         if U(user_id)["setup"] == "ready":
             bot.send_message(message.chat.id, T(current_lang, "welcome_back").format(kao=random.choice(KAO_HAPPY)),
-                             reply_markup=ReplyKeyboardRemove())
+                             reply_markup=main_keyboard(current_lang, user_id))
         else:
             start_onboarding(user_id, message.chat.id)
     else:
@@ -1724,6 +1726,32 @@ def v_blank(vid):
 
 
 
+# Этапы пути: каждый этап = неделя из 12 глаголов. Название и цель показываем в сообщениях и в /progress.
+STAGES = [
+    {"name": {"ru": "Основа", "uk": "Основа", "en": "Foundation"},
+     "goal": {"ru": "самые нужные глаголы: быть, идти, хотеть, видеть, есть, пить",
+              "uk": "найпотрібніші дієслова: бути, йти, хотіти, бачити, їсти, пити",
+              "en": "the most essential verbs: to be, go, want, see, eat, drink"}},
+    {"name": {"ru": "Быт и разговор", "uk": "Побут і розмова", "en": "Daily life & talk"},
+     "goal": {"ru": "просить, платить, говорить, учить, работать, жить",
+              "uk": "просити, платити, говорити, вчити, працювати, жити",
+              "en": "ask for, pay, speak, learn, work, live"}},
+    {"name": {"ru": "Повседневные действия", "uk": "Щоденні дії", "en": "Everyday actions"},
+     "goal": {"ru": "читать, писать, слушать, смотреть, готовить, играть",
+              "uk": "читати, писати, слухати, дивитись, готувати, грати",
+              "en": "read, write, listen, watch, cook, play"}},
+    {"name": {"ru": "Мысли и движение", "uk": "Думки і рух", "en": "Thinking & moving"},
+     "goal": {"ru": "думать, встречаться, начинать, спрашивать, гулять, водить",
+              "uk": "думати, зустрічатися, починати, питати, гуляти, водити",
+              "en": "think, meet, start, ask, walk, drive"}},
+    {"name": {"ru": "Ещё полезное", "uk": "Ще корисне", "en": "More essentials"},
+     "goal": {"ru": "преподавать, звонить, понимать, верить, бояться, оставаться",
+              "uk": "викладати, дзвонити, розуміти, вірити, боятися, залишатися",
+              "en": "teach, call, understand, believe, fear, stay"}},
+]
+INTENSITY = {"calm": 5, "normal": 9, "dense": 13}   # сообщений в день (сколько глаголов — задаёт темп)
+
+
 def user_lang(user_id):
     return active_trainings.get(user_id, {}).get("lang") or "ru"
 
@@ -1831,6 +1859,7 @@ _lock = threading.RLock()
 _USER_DEFAULTS = {
     "pace": PACE_DEFAULT, "win": "std", "setup": None, "claimed": [], "learned": [],
     "cycle": None, "day": None, "test": None, "ach": [], "marked": [], "page": 0, "wkn": 0,
+    "inten": "normal", "next_btn": True, "kb_sent": False,
 }
 
 
@@ -1890,9 +1919,20 @@ PT = {
         "settings": "⚙️ Настройки\n\nГлаголов в день: {n}\nВремя сообщений: {a}:00–{b}:00",
         "win_early": "Рано", "win_std": "Днём", "win_late": "Поздно",
         "today_none": "Сегодня глаголов ещё нет. Загляну в {h}:00.", "today_test": "Сегодня день теста. Жми /test",
-        "hint": "Всё приходит само. Если хочешь: /progress, /settings, /test, /drill.",
+        "hint": "Всё приходит само, а «➡️ Дальше» ведёт по программе. Ещё: /progress, /settings, /test, /drill.",
         "drill_hint": "Выбери глагол для прописей:",
         "old_btn": "Бот обновился: теперь глаголы приходят сами. Команды: /progress, /settings, /test, /drill.",
+        "stage_head": "📍 Этап {s} из {S}: «{name}»", "stage_line": "📍 Этап {s} из {S} «{name}» · день {d} из {m}",
+        "stage_line_test": "📍 Этап {s} из {S} «{name}» · тест", "repeat_line": "🔁 Повтор этапа {s} · день {d} из {m}",
+        "stage_goal": "Цель: {goal}.", "stage_learn": "Выучить ({n}):", "stage_how": "Как идём: {m} дней глаголы приходят сами, потом тест (нужно {p}% верных). Сдал, и этап пройден.",
+        "stage_next": "Следующий этап: «{name}».", "stage_last": "Это последний этап.",
+        "repeat_head": "🔁 Повторяем этап {s}: возвращаются глаголы ({n}):", "repeat_how": "Они придут ещё раз за {m} дн., потом снова тест.",
+        "review_head": "🏁 Курс пройден! Дальше неделя повторения выученного ({n} глаголов).",
+        "mix": "Вспомни прошлое", "day_recap": "Итог дня", "next_btn": "➡️ Дальше", "next_hint": "Внизу теперь кнопка «➡️ Дальше»: жми, когда захочешь продолжить, не дожидаясь сообщений. Убрать её можно в /settings.",
+        "next_done": "На сегодня по плану всё ✅ Хочешь ещё? Держи вопрос:", "next_off": "Ок, убрал кнопку внизу.", "next_on": "Кнопка «➡️ Дальше» снова внизу.",
+        "intensity": "Сообщений в день", "int_calm": "Спокойно", "int_normal": "Обычно", "int_dense": "Плотно", "btn_toggle_on": "Кнопка «Дальше»: вкл", "btn_toggle_off": "Кнопка «Дальше»: выкл",
+        "test_in": "до теста: {n} дн.", "stage_left": "Осталось выучить: {n}", "tomorrow": "Завтра: новые глаголы.", "test_soon": "Дальше: тест. Жми «➡️ Дальше».",
+        "go_test": "Погнали, тест!", "setup_first": "Сначала познакомимся:",
         "welcome_back": "{kao} Снова привет! Глаголы приходят сами. /progress покажет твой путь.",
     },
     "uk": {
@@ -1918,9 +1958,20 @@ PT = {
         "settings": "⚙️ Налаштування\n\nДієслів на день: {n}\nЧас повідомлень: {a}:00–{b}:00",
         "win_early": "Рано", "win_std": "Вдень", "win_late": "Пізно",
         "today_none": "Сьогодні дієслів ще немає. Загляну о {h}:00.", "today_test": "Сьогодні день тесту. Тисни /test",
-        "hint": "Усе приходить само. Якщо хочеш: /progress, /settings, /test, /drill.",
+        "hint": "Усе приходить само, а «➡️ Далі» веде за програмою. Ще: /progress, /settings, /test, /drill.",
         "drill_hint": "Обери дієслово для прописів:",
         "old_btn": "Бот оновився: тепер дієслова приходять самі. Команди: /progress, /settings, /test, /drill.",
+        "stage_head": "📍 Етап {s} з {S}: «{name}»", "stage_line": "📍 Етап {s} з {S} «{name}» · день {d} з {m}",
+        "stage_line_test": "📍 Етап {s} з {S} «{name}» · тест", "repeat_line": "🔁 Повтор етапу {s} · день {d} з {m}",
+        "stage_goal": "Мета: {goal}.", "stage_learn": "Вивчити ({n}):", "stage_how": "Як ідемо: {m} днів дієслова приходять самі, потім тест (потрібно {p}% вірних). Склав, і етап пройдено.",
+        "stage_next": "Наступний етап: «{name}».", "stage_last": "Це останній етап.",
+        "repeat_head": "🔁 Повторюємо етап {s}: повертаються дієслова ({n}):", "repeat_how": "Вони прийдуть ще раз за {m} дн., потім знову тест.",
+        "review_head": "🏁 Курс пройдено! Далі тиждень повторення вивченого ({n} дієслів).",
+        "mix": "Згадай минуле", "day_recap": "Підсумок дня", "next_btn": "➡️ Далі", "next_hint": "Внизу тепер кнопка «➡️ Далі»: тисни, коли захочеш продовжити, не чекаючи повідомлень. Прибрати її можна в /settings.",
+        "next_done": "На сьогодні за планом усе ✅ Хочеш ще? Тримай питання:", "next_off": "Ок, прибрав кнопку внизу.", "next_on": "Кнопка «➡️ Далі» знову внизу.",
+        "intensity": "Повідомлень на день", "int_calm": "Спокійно", "int_normal": "Звичайно", "int_dense": "Щільно", "btn_toggle_on": "Кнопка «Далі»: увімк", "btn_toggle_off": "Кнопка «Далі»: вимк",
+        "test_in": "до тесту: {n} дн.", "stage_left": "Лишилось вивчити: {n}", "tomorrow": "Завтра: нові дієслова.", "test_soon": "Далі: тест. Тисни «➡️ Далі».",
+        "go_test": "Поїхали, тест!", "setup_first": "Спочатку познайомимось:",
         "welcome_back": "{kao} Знову привіт! Дієслова приходять самі. /progress покаже твій шлях.",
     },
     "en": {
@@ -1946,9 +1997,20 @@ PT = {
         "settings": "⚙️ Settings\n\nVerbs per day: {n}\nMessage window: {a}:00–{b}:00",
         "win_early": "Early", "win_std": "Daytime", "win_late": "Late",
         "today_none": "No verbs yet today. I'll be back at {h}:00.", "today_test": "Today is test day. Tap /test",
-        "hint": "Everything arrives by itself. If you want: /progress, /settings, /test, /drill.",
+        "hint": "Everything arrives by itself, and “➡️ Next” walks you through the program. Also: /progress, /settings, /test, /drill.",
         "drill_hint": "Pick a verb to practice:",
         "old_btn": "The bot was updated: verbs now arrive by themselves. Commands: /progress, /settings, /test, /drill.",
+        "stage_head": "📍 Stage {s} of {S}: “{name}”", "stage_line": "📍 Stage {s} of {S} “{name}” · day {d} of {m}",
+        "stage_line_test": "📍 Stage {s} of {S} “{name}” · test", "repeat_line": "🔁 Stage {s} repeat · day {d} of {m}",
+        "stage_goal": "Goal: {goal}.", "stage_learn": "To learn ({n}):", "stage_how": "How it goes: {m} days the verbs arrive on their own, then a test ({p}% correct needed). Pass it and the stage is done.",
+        "stage_next": "Next stage: “{name}”.", "stage_last": "This is the last stage.",
+        "repeat_head": "🔁 Repeating stage {s}: these verbs come back ({n}):", "repeat_how": "They arrive once more over {m} days, then another test.",
+        "review_head": "🏁 Course complete! Next is a review week of what you learned ({n} verbs).",
+        "mix": "Remember earlier", "day_recap": "Day recap", "next_btn": "➡️ Next", "next_hint": "There's now a “➡️ Next” button at the bottom: tap it whenever you want to continue without waiting. You can remove it in /settings.",
+        "next_done": "That's everything planned for today ✅ Want more? Here's a question:", "next_off": "Okay, button removed.", "next_on": "The “➡️ Next” button is back.",
+        "intensity": "Messages per day", "int_calm": "Calm", "int_normal": "Normal", "int_dense": "Dense", "btn_toggle_on": "“Next” button: on", "btn_toggle_off": "“Next” button: off",
+        "test_in": "test in {n} d", "stage_left": "Left to learn: {n}", "tomorrow": "Tomorrow: new verbs.", "test_soon": "Next: the test. Tap “➡️ Next”.",
+        "go_test": "Let's go, the test!", "setup_first": "Let's meet first:",
         "welcome_back": "{kao} Hi again! Verbs arrive by themselves. /progress shows your path.",
     },
 }
@@ -1999,14 +2061,79 @@ def window(uid):
     return WINDOWS.get(U(uid)["win"], WINDOWS["std"])
 
 
-def _slot_minutes(uid, today, fracs):
+def _slot_minutes(uid, today, n):
+    """n сообщений равномерно по окну дня; первое сразу в начале окна."""
     a, b = window(uid)
     span = (b - a) * 60
     rnd = random.Random(uid * 7919 + today.toordinal())
-    out = []
-    for k, f in enumerate(fracs):
-        out.append(a * 60 + int(f * span) + (0 if k == 0 else rnd.randint(-8, 8)))
-    return out
+    return [a * 60 + int(span * 0.93 * k / max(1, n - 1)) + (0 if k == 0 else rnd.randint(-5, 5)) for k in range(n)] if n > 1 else [a * 60]
+
+
+def older_verbs(uid, today_ids):
+    u = U(uid)
+    c = u["cycle"] or {"pack": []}
+    return [v for v in c["pack"] if v not in today_ids] + [v for v in u["learned"] if v not in today_ids and v not in c["pack"]]
+
+
+def day_frames(uid, ids):
+    """Список кадров дня. Сколько их, зависит от «плотности» в настройках; порядок всегда один и тот же."""
+    u = U(uid)
+    n = INTENSITY.get(u["inten"], INTENSITY["normal"])
+    ex = [f"ex:{v}" for v in ids]
+    quiz = [f"quiz:{v}" for v in ids]
+    form = [f"form:{v}" for v in ids]
+    mix = ["mix"] if older_verbs(uid, ids) else []
+    canon = ["stage"] * 0 + ["intro"] + ex + ["recall"] + quiz + mix + form + ["recap"]
+    priority = ["intro", "recall", "recap"] + quiz + ex + mix + form
+    chosen = set(priority[:n])
+    return [f for f in canon if f in chosen]
+
+
+def stage_index(c):
+    if not c or c.get("review"):
+        return None
+    plan = sorted(c["plan"])
+    base = (plan[len(plan) // 2] if plan else 0) // PACK       # этап по «середине» недели: знакомые глаголы его не сдвигают
+    return min(len(STAGES) - 1, base)
+
+
+def stage_name(s, lang):
+    n = STAGES[s]["name"]
+    return n.get(lang) or n["en"]
+
+
+def stage_goal(s, lang):
+    g = STAGES[s]["goal"]
+    return g.get(lang) or g["en"]
+
+
+def stage_line(uid):
+    lang = user_lang(uid)
+    c = U(uid)["cycle"]
+    s = stage_index(c)
+    if s is None:
+        return T(lang, "review_head").split("!")[0] + "!"
+    key = "stage_line_test" if c["state"] == "test" else ("repeat_line" if c["repeat"] else "stage_line")
+    return T(lang, key).format(s=s + 1, S=len(STAGES), name=stage_name(s, lang), d=min(max(c["days"], 1), c["max_days"]), m=c["max_days"])
+
+
+def stage_text(uid):
+    """Объяснение этапа: цель, что выучить, как проходим, что дальше. Приходит в первый день этапа."""
+    lang = user_lang(uid)
+    c = U(uid)["cycle"]
+    s = stage_index(c)
+    verbs = "\n".join(f"• {VERB_COURSE[v][0]} — {v_tr(lang, v)}" for v in c["plan"])
+    if s is None:
+        return T(lang, "review_head").format(n=len(c["plan"])) + "\n\n" + verbs
+    if c["repeat"]:
+        return (T(lang, "repeat_head").format(s=s + 1, n=len(c["plan"])) + "\n\n" + verbs + "\n\n"
+                + T(lang, "repeat_how").format(m=c["max_days"]))
+    parts = [T(lang, "stage_head").format(s=s + 1, S=len(STAGES), name=stage_name(s, lang)),
+             T(lang, "stage_goal").format(goal=stage_goal(s, lang)), "",
+             T(lang, "stage_learn").format(n=len(c["plan"])), verbs, "",
+             T(lang, "stage_how").format(m=c["max_days"], p=int(PASS_RATIO * 100))]
+    parts.append(T(lang, "stage_next").format(name=stage_name(s + 1, lang)) if s + 1 < len(STAGES) else T(lang, "stage_last"))
+    return "\n".join(parts)
 
 
 def build_day(uid, today, _depth=0):
@@ -2036,13 +2163,14 @@ def build_day(uid, today, _depth=0):
         save_course()
         return build_day(uid, today, _depth + 1)
     if c["state"] == "deliver":
-        names = ["intro", "example", "recall"] + [f"quiz:{v}" for v in ids]
-        fracs = [0.0, 0.27, 0.55] + [0.80 + 0.04 * k for k in range(len(ids))]
+        names = day_frames(uid, ids)
+        if c["days"] == 1:
+            names = ["stage"] + names            # в первый день этапа объясняем, где мы и что надо выучить
     else:
-        names, fracs = ["testday", "recap", "remind"], [0.0, 0.45, 0.85]
-    mins = _slot_minutes(uid, today, fracs)
+        names = ["testday", "recap", "quizp", "remind"]
+    mins = _slot_minutes(uid, today, len(names))
     u["day"] = {"date": today.isoformat(), "state": c["state"], "ids": ids, "frames": [[n, m] for n, m in zip(names, mins)],
-                "sent": [], "q": {}}
+                "sent": [], "q": {}, "extra": 0}
     save_course()
     return u["day"]
 
@@ -2071,7 +2199,7 @@ def intro_text(uid):
     ids = U(uid)["day"]["ids"]
     body = "\n\n".join(card_line(lang, vid, i + 1) for i, vid in enumerate(ids))
     names = ", ".join(VERB_COURSE[vid][0] for vid in ids)
-    return f"{random.choice(KAO_HAPPY)} {T(lang, 'intro')}: {names}\n\n{body}"
+    return f"{random.choice(KAO_HAPPY)} {T(lang, 'intro')}: {names}\n{stage_line(uid)}\n\n{body}"
 
 
 def intro_markup(uid):
@@ -2129,6 +2257,49 @@ def send_spoilers(uid, title, vids):
         bot.send_message(uid, f"🧠 {title}\n\n" + "\n".join(plain))
 
 
+def send_ex(uid, vid):
+    lang = user_lang(uid)
+    v = VERB_COURSE[vid]
+    kb = None
+    if edge_tts is not None:
+        kb = InlineKeyboardMarkup()
+        kb.row(audio_button("e", vid))
+    bot.send_message(uid, f"💬 {v[0]}\n\n{v[5]}\n{v_ex_tr(lang, vid)}", reply_markup=kb)
+
+
+def send_mix(uid):
+    u = U(uid)
+    older = older_verbs(uid, u["day"]["ids"])
+    if older:
+        send_spoilers(uid, T(user_lang(uid), "mix"), random.sample(older, min(4, len(older))))
+
+
+def send_day_recap(uid):
+    lang = user_lang(uid)
+    ids = U(uid)["day"]["ids"]
+    lines = [f"📌 {T(lang, 'day_recap')}", ""]
+    for vid in ids:
+        v = VERB_COURSE[vid]
+        lines.append(f"{card_line(lang, vid)}\n   {v[5]} — {v_ex_tr(lang, vid)}")
+        lines.append("")
+    bot.send_message(uid, "\n".join(lines).strip())
+
+
+def send_form(uid, vid):
+    send_quiz(uid, vid, qtype=2)
+
+
+def send_quizp(uid):
+    c = U(uid)["cycle"]
+    pool = [v for v in c["pack"] if v not in c["credited"]] or list(c["pack"])
+    if pool:
+        send_quiz(uid, random.choice(pool))
+
+
+def send_stage(uid):
+    bot.send_message(uid, stage_text(uid))
+
+
 def send_recall(uid):
     u = U(uid)
     c = u["cycle"]
@@ -2172,10 +2343,10 @@ def make_q(uid, vid, qtype, lang):
     return {"id": vid, "t": qtype, "prompt": prompt, "opts": opts, "ans": opts.index(correct), "done": False}
 
 
-def send_quiz(uid, vid):
+def send_quiz(uid, vid, qtype=None):
     lang = user_lang(uid)
     u = U(uid)
-    q = make_q(uid, vid, random.choice((0, 1, 2)), lang)
+    q = make_q(uid, vid, random.choice((0, 1, 2)) if qtype is None else qtype, lang)
     u["day"]["q"][str(vid)] = q
     save_course()
     kb = InlineKeyboardMarkup()
@@ -2189,6 +2360,18 @@ def day_message(uid, frame):
     lang = user_lang(uid)
     if frame == "intro":
         send_intro(uid)
+    elif frame == "stage":
+        send_stage(uid)
+    elif frame.startswith("ex:"):
+        send_ex(uid, int(frame.split(":")[1]))
+    elif frame == "mix":
+        send_mix(uid)
+    elif frame == "recap" and u["day"]["state"] == "deliver":
+        send_day_recap(uid)
+    elif frame.startswith("form:"):
+        send_form(uid, int(frame.split(":")[1]))
+    elif frame == "quizp":
+        send_quizp(uid)
     elif frame == "example":
         send_example(uid)
     elif frame == "recall":
@@ -2213,6 +2396,68 @@ def send_test_invite(uid):
     lang = user_lang(uid)
     c = U(uid)["cycle"]
     bot.send_message(uid, T(lang, "test_day").format(n=len(c["pack"])), reply_markup=test_invite_markup(lang))
+
+
+# ---------------------------------------------------------------- кнопка «➡️ Дальше»
+NEXT_NAMES = {"ru": "➡️ Дальше", "uk": "➡️ Далі", "en": "➡️ Next"}
+
+
+def next_label(lang):
+    return NEXT_NAMES.get(lang) or NEXT_NAMES["en"]
+
+
+NEXT_BTNS = {v.replace("\ufe0f", "") for v in NEXT_NAMES.values()}
+
+
+def next_keyboard(lang):
+    try:
+        kb = ReplyKeyboardMarkup(resize_keyboard=True, is_persistent=True)
+    except TypeError:                                   # старая версия библиотеки без is_persistent
+        kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row(KeyboardButton(text=next_label(lang)))
+    return kb
+
+
+def go_next(uid, chat_id):
+    """«Дальше»: следующий шаг программы прямо сейчас. Не ждёшь сообщений, жмёшь и идёшь дальше."""
+    lang = user_lang(uid)
+    u = U(uid)
+    if u["setup"] != "ready":
+        start_onboarding(uid, chat_id)
+        return
+    if u["test"]:
+        text, kb = test_view(uid)
+        bot.send_message(chat_id, text, reply_markup=kb)
+        return
+    now = budapest_now()
+    day = u["day"]
+    if not day or day["date"] != now.date().isoformat():
+        day = build_day(uid, now.date())
+    if day["state"] == "test":
+        bot.send_message(chat_id, T(lang, "go_test"))
+        reason = start_test(uid, chat_id)
+        if reason:
+            bot.send_message(chat_id, reason)
+        return
+    if day["state"] == "done":
+        bot.send_message(chat_id, T(lang, "tomorrow"))
+        return
+    pending = [n for n, _m in day["frames"] if n not in day["sent"]]
+    if pending:
+        day["sent"].append(pending[0])
+        save_course()
+        day_message(uid, pending[0])
+        return
+    day["extra"] = day.get("extra", 0) + 1
+    save_course()
+    if day["extra"] == 1:
+        bot.send_message(chat_id, T(lang, "next_done"))
+    c = u["cycle"]
+    pool = [v for v in (c["pack"] if c else []) if v not in c["credited"]] or list(c["pack"] if c else []) or list(u["learned"])
+    if pool:
+        send_quiz(uid, random.choice(pool))
+    else:
+        bot.send_message(chat_id, T(lang, "tomorrow"))
 
 
 # ---------------------------------------------------------------- тест
@@ -2327,28 +2572,39 @@ def progress_text(uid):
     u = U(uid)
     learned = set(u["learned"])
     c = u["cycle"]
-    lines = [T(lang, "progress"), "", T(lang, "learned").format(n=len(learned), t=N_VERBS)]
+    lines = [T(lang, "progress"), ""]
     if c:
-        if c["state"] == "test":
-            lines.append(T(lang, "week_test").format(n=c["n"]))
-        elif c["repeat"]:
-            lines.append(T(lang, "week_repeat").format(d=min(c["days"], c["max_days"]), m=c["max_days"]))
+        s = stage_index(c)
+        if s is not None:
+            lines.append(stage_line(uid))
+            lines.append(T(lang, "stage_goal").format(goal=stage_goal(s, lang)))
+            left = [v for v in c["plan"] if v not in learned]
+            lines.append(T(lang, "stage_left").format(n=len(left)))
+            if c["state"] == "test":
+                lines.append(T(lang, "test_soon"))
+            else:
+                lines.append(T(lang, "test_in").format(n=max(1, c["max_days"] - c["days"] + 1)).capitalize())
+            if s + 1 < len(STAGES):
+                lines.append(T(lang, "stage_next").format(name=stage_name(s + 1, lang)))
+            else:
+                lines.append(T(lang, "stage_last"))
         else:
-            lines.append(T(lang, "week").format(n=c["n"], d=min(max(c["days"], 1), c["max_days"]), m=c["max_days"]))
+            lines.append(stage_line(uid))
+    lines += ["", T(lang, "learned").format(n=len(learned), t=N_VERBS)]
     nxt = next((m for m, _ in MILESTONES if m > len(learned)), None)
     lines.append(T(lang, "next_ach").format(n=nxt - len(learned)) if nxt else T(lang, "all_ach"))
     lines += ["", T(lang, "map")]
-    first_open = True
-    for b in range(0, N_VERBS, PACK):
-        ids = range(b, min(N_VERBS, b + PACK))
+    cur = stage_index(c) if c else 0
+    for si, st in enumerate(STAGES):
+        ids = range(si * PACK, min(N_VERBS, (si + 1) * PACK))
         k = sum(1 for i in ids if i in learned)
         if k == len(ids):
             mark = "✅"
-        elif first_open:
-            mark, first_open = "📍", False
+        elif cur is None or si == cur:
+            mark = "📍"
         else:
-            mark = "🔒"
-        lines.append(f"{mark} {b // PACK + 1}: {k}/{len(ids)}")
+            mark = "🔒" if si > (cur or 0) else "📍"
+        lines.append(f"{mark} {si + 1}. {stage_name(si, lang)}: {k}/{len(ids)}")
     got = [e for m, e in MILESTONES if len(learned) >= m]
     if got:
         lines += ["", " ".join(got)]
@@ -2359,12 +2615,15 @@ def settings_view(uid):
     lang = user_lang(uid)
     u = U(uid)
     a, b = window(uid)
-    text = T(lang, "settings").format(n=u["pace"], a=a, b=b)
+    text = T(lang, "settings").format(n=u["pace"], a=a, b=b) + f"\n{T(lang, 'intensity')}: {INTENSITY.get(u['inten'], 9)}"
     kb = InlineKeyboardMarkup()
     kb.row(*[InlineKeyboardButton(("• " if u["pace"] == n else "") + T(lang, "pace_btn").format(n=n),
                                   callback_data=f"st:pace:{n}") for n in range(PACE_MIN, PACE_MAX + 1)])
     kb.row(*[InlineKeyboardButton(("• " if u["win"] == k else "") + f"{T(lang, 'win_' + k)} {w[0]}–{w[1]}",
                                   callback_data=f"st:win:{k}") for k, w in WINDOWS.items()])
+    kb.row(*[InlineKeyboardButton(("• " if u["inten"] == k else "") + T(lang, "int_" + k),
+                                  callback_data=f"st:int:{k}") for k in INTENSITY])
+    kb.row(InlineKeyboardButton(T(lang, "btn_toggle_on" if u["next_btn"] else "btn_toggle_off"), callback_data="st:btn:x"))
     return text, kb
 
 
@@ -2413,9 +2672,12 @@ def finish_setup(uid, pace):
     now = budapest_now()
     day = build_day(uid, now.date())
     now_min = now.hour * 60 + now.minute
-    day["sent"] = [n for n, m in day["frames"] if m <= now_min and n != "intro"] + ["intro"]
+    day["sent"] = [n for n, m in day["frames"] if m <= now_min and n not in ("intro", "stage")] + ["intro", "stage"]
     save_course()
-    bot.send_message(uid, T(lang, "ob_go"))
+    u["kb_sent"] = True
+    bot.send_message(uid, T(lang, "ob_go"), reply_markup=next_keyboard(lang) if u["next_btn"] else None)
+    if day["frames"] and day["frames"][0][0] == "stage":
+        send_stage(uid)
     send_intro(uid)
 
 
@@ -2595,6 +2857,15 @@ def on_settings(call):
             u["pace"] = max(PACE_MIN, min(PACE_MAX, int(val)))
         elif kind == "win" and val in WINDOWS:
             u["win"] = val
+        elif kind == "int" and val in INTENSITY:
+            u["inten"] = val
+        elif kind == "btn":
+            u["next_btn"] = not u["next_btn"]
+            lang = user_lang(uid)
+            if u["next_btn"]:
+                bot.send_message(call.message.chat.id, T(lang, "next_on"), reply_markup=next_keyboard(lang))
+            else:
+                bot.send_message(call.message.chat.id, T(lang, "next_off"), reply_markup=ReplyKeyboardRemove())
         save_course()
         text, kb = settings_view(uid)
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb)
@@ -2703,6 +2974,10 @@ def tick_user(uid, now):
         return
     if u["setup"] != "ready":
         return
+    if u["next_btn"] and not u["kb_sent"] and now_min >= 9 * 60:
+        u["kb_sent"] = True
+        save_course()
+        bot.send_message(uid, T(lang, "next_hint"), reply_markup=next_keyboard(lang))
     a, _b = window(uid)
     day = u["day"]
     if (not day or day["date"] != today.isoformat()) and now_min >= a * 60:
@@ -2772,6 +3047,11 @@ def handle_all_messages(message):
         exit_to_menu(message.chat.id, user_id)
         return
 
+    # --- кнопка «Дальше»
+    if text.replace("\ufe0f", "") in NEXT_BTNS and "verb" not in data:
+        go_next(user_id, message.chat.id)
+        return
+
     # --- игра с картинками
     if text == CARDS_BTN:
         start_cards(message.chat.id, user_id)
@@ -2783,7 +3063,7 @@ def handle_all_messages(message):
         if not found:
             send_reka_ai(
                 message.chat.id, user_id, text, lang,
-                reply_markup=main_keyboard(lang),
+                reply_markup=main_keyboard(lang, user_id),
             )
             return
 
