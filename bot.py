@@ -2675,6 +2675,8 @@ import io
 import math as _math
 
 ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+UPLOAD_DIR = os.path.join(DATA_DIR, "assets")          # картинки, присланные боту в Telegram: переживают перезапуск вместе с DATA_DIR
+ADMIN_FILE = os.path.join(DATA_DIR, "admin.txt")
 CANVAS = 768                              # слои — квадраты 768×768 с прозрачностью, друг под другом
 OUT_SIZE = 640
 SLOT_ORDER = ["bg", "outfit", "face", "hat", "acc"]          # порядок наложения: фон → Réka → одежда → очки → шапка → аксессуар
@@ -2718,7 +2720,8 @@ def _star(cx, cy, r1, r2, n=5):
 
 
 def _layer_file(name):
-    for p in (os.path.join(ASSET_DIR, name + ".png"), os.path.join(ASSET_DIR, "items", name + ".png")):
+    root = os.path.dirname(ASSET_DIR)                    # можно просто положить PNG рядом с bot.py, без папок
+    for p in (os.path.join(UPLOAD_DIR, name + ".png"), os.path.join(ASSET_DIR, name + ".png"), os.path.join(ASSET_DIR, "items", name + ".png"), os.path.join(root, name + ".png")):
         if os.path.isfile(p):
             try:
                 return Image.open(p).convert("RGBA").resize((CANVAS, CANVAS), Image.LANCZOS)
@@ -3006,6 +3009,79 @@ def send_stage(uid):
     """Первый день этапа: обновляем закреплённую карточку и коротко говорим, что началось."""
     refresh_hub(uid, force=True)
     bot.send_message(uid, stage_text(uid))
+
+
+# ---------------------------------------------------------------- картинки через Telegram, без GitHub
+def _admin_id():
+    try:
+        with open(ADMIN_FILE, encoding="utf-8") as f:
+            return int(f.read().strip())
+    except Exception:
+        return None
+
+
+def _is_admin(uid):
+    adm = _admin_id()
+    if adm is None:                                      # первый, кто пришлёт картинку, становится владельцем
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            with open(ADMIN_FILE, "w", encoding="utf-8") as f:
+                f.write(str(uid))
+        except Exception:
+            return False
+        return True
+    return adm == uid
+
+
+SETREKA_HELP = (
+    "Пришли PNG ФАЙЛОМ (не как фото: у фото пропадает прозрачность) и в подписи напиши:\n"
+    "/setreka  — это сама Réka\n"
+    "/setreka bg_default  — фон по умолчанию\n"
+    "/setreka hat_crown  — предмет. Названия: " + ", ".join(it[0] for it in ITEMS) + "\n"
+    "Квадрат 1024×1024, все слои одного размера и на одном месте."
+)
+
+
+@bot.message_handler(commands=["setreka"])
+def cmd_setreka(message):
+    if not _is_admin(message.from_user.id):
+        return
+    bot.send_message(message.chat.id, SETREKA_HELP)
+
+
+@bot.message_handler(content_types=["document", "photo"])
+def on_asset_upload(message):
+    uid = message.from_user.id
+    cap = (message.caption or "").strip()
+    if not cap.startswith("/setreka"):
+        return
+    if not _is_admin(uid):
+        return
+    parts = cap.split()
+    name = parts[1] if len(parts) > 1 else "reka"
+    if name not in ITEM_BY_ID and name not in ("reka", "bg_default"):
+        bot.send_message(message.chat.id, "Не знаю такое имя.\n\n" + SETREKA_HELP)
+        return
+    is_photo = message.content_type == "photo" if hasattr(message, "content_type") else False
+    try:
+        fid = message.photo[-1].file_id if is_photo else message.document.file_id
+        data = bot.download_file(bot.get_file(fid).file_path)
+        img = Image.open(io.BytesIO(data)).convert("RGBA")
+        if is_photo and not name.startswith("bg"):
+            bot.send_message(message.chat.id, "Это сжатое фото: фон не станет прозрачным. Пришли тот же PNG как ФАЙЛ (скрепка → Файл).")
+            return
+        img = img.resize((CANVAS, CANVAS), Image.LANCZOS) if img.size != (CANVAS, CANVAS) else img
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        img.save(os.path.join(UPLOAD_DIR, name + ".png"), "PNG")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Не получилось прочитать картинку: {e}")
+        return
+    _render_cache.clear()
+    for k in list(_store):
+        _store[k]["hub_img"] = ""                        # у всех карточка перерисуется с новой картинкой
+    save_course()
+    bot.send_message(message.chat.id, f"Готово: {name}.png сохранён. Карточка обновится сама.")
+    refresh_hub(uid, force=True)
 
 
 # ---------------------------------------------------------------- магазин
