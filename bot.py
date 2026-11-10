@@ -1901,8 +1901,7 @@ _lock = threading.RLock()
 _USER_DEFAULTS = {
     "pace": PACE_DEFAULT, "win": "std", "setup": None, "claimed": [], "learned": [],
     "cycle": None, "day": None, "test": None, "ach": [], "marked": [], "page": 0, "wkn": 0,
-    "inten": "normal", "next_btn": True, "kb_sent": False, "tidy": True, "pin_id": None,
-    "tokens": 0, "owned": [], "worn": {}, "hub_kind": None, "hub_sig": "", "hub_img": "",
+    "inten": "normal", "next_btn": True, "kb_sent": False, "tidy": True, "pin_id": None, "trail": [],
 }
 
 
@@ -2576,11 +2575,10 @@ def go_next(uid, chat_id):
     send_quiz(uid, random.choice(pool))
 
 
-# ---------------------------------------------------------------- чистый чат
-TIDY_VOICE_TTL = 240          # голосовое живёт 4 минуты и удаляется
-_tidy = {}                    # chat_id -> [(message_id, время, вид)]
+# ---------------------------------------------------------------- чистый чат: в чате всегда одно сообщение
+TIDY_VOICE_TTL = 240          # голосовое, если его всё же попросили, удаляется само через 4 минуты
 _prefix = {}                  # chat_id -> шапка для следующего сообщения
-_tidy_lock = threading.Lock()
+_tidy_lock = threading.RLock()
 
 
 def tidy_on(chat_id):
@@ -2591,12 +2589,15 @@ def tidy_on(chat_id):
 
 
 def tidy_track(chat_id, mid, kind="card"):
+    """Запоминаем id сообщения (в файле, чтобы переживало перезапуск): позже оно будет стёрто."""
     if mid is None:
         return
     if kind != "voice" and not tidy_on(chat_id):
         return
     with _tidy_lock:
-        _tidy.setdefault(chat_id, []).append((mid, time.time(), kind))
+        tr = U(chat_id)["trail"]
+        tr.append([mid, time.time(), kind])
+        del tr[:-60]
 
 
 def _tidy_delete(chat_id, mids):
@@ -2607,460 +2608,268 @@ def _tidy_delete(chat_id, mids):
             pass
 
 
+def _tidy_take(chat_id):
+    """Забираем всё, что сейчас висит в чате (и старую закреплённую карточку прошлых версий)."""
+    with _tidy_lock:
+        u = U(chat_id)
+        old = [e[0] for e in u["trail"]]
+        u["trail"] = []
+        if u.get("pin_id"):
+            old.append(u["pin_id"])
+            u["pin_id"] = None
+    return old
+
+
 def tidy_sweep_voices():
     now = time.time()
     drops = []
     with _tidy_lock:
-        for chat_id, items in _tidy.items():
-            old = [it for it in items if it[2] == "voice" and now - it[1] > TIDY_VOICE_TTL]
+        for key, u in list(_store.items()):
+            tr = u.get("trail") or []
+            old = [e for e in tr if e[2] == "voice" and now - e[1] > TIDY_VOICE_TTL]
             if old:
-                _tidy[chat_id] = [it for it in items if it not in old]
-                drops.append((chat_id, [it[0] for it in old]))
+                u["trail"] = [e for e in tr if e not in old]
+                drops.append((int(key), [e[0] for e in old]))
     for chat_id, mids in drops:
         _tidy_delete(chat_id, mids)
 
 
 _raw_send_message = bot.send_message
 _raw_send_voice = bot.send_voice
+_raw_edit_text = bot.edit_message_text
 
 
 def _send_message(chat_id, text=None, *a, **kw):
-    keep = kw.pop("_keep", False)
+    kw.pop("_keep", None)
     pre = None
-    if not keep and isinstance(text, str):
+    if isinstance(text, str):
         pre = _prefix.pop(chat_id, None)
         if pre:
             if kw.get("parse_mode") == "MarkdownV2":
                 text = escape_markdown_v2(pre) + "\n\n" + text
             else:
                 text = pre + "\n\n" + text
+    tidy = tidy_on(chat_id)
+    kind = "card"
     try:
-        sent = _raw_send_message(chat_id, text, *a, **kw)
+        sent = None
+        if tidy and isinstance(text, str) and not a:
+            sent = _send_screen(chat_id, text, dict(kw))
+            if sent is not None:
+                kind = "screen"
+        if sent is None:
+            sent = _raw_send_message(chat_id, text, *a, **kw)
     except Exception:
         if pre:
             _prefix[chat_id] = pre
         raise
-    if tidy_on(chat_id):
-        with _tidy_lock:
-            old = [it[0] for it in _tidy.get(chat_id, [])]
-            _tidy[chat_id] = []
-        _tidy_delete(chat_id, old)
-        if not keep:
-            tidy_track(chat_id, getattr(sent, "message_id", None), "card")
-    if isinstance(chat_id, int) and chat_id > 0 and not keep:
-        try:
-            if U(chat_id)["setup"] == "ready":
-                hub_schedule(chat_id)
-        except Exception as e:
-            print(f"Карточка: {e}")
+    if tidy:
+        _tidy_delete(chat_id, _tidy_take(chat_id))
+        tidy_track(chat_id, getattr(sent, "message_id", None), kind)
+        save_course()
     return sent
 
 
 def _send_voice(chat_id, *a, **kw):
     sent = _raw_send_voice(chat_id, *a, **kw)
     tidy_track(chat_id, getattr(sent, "message_id", None), "voice")
-    try:
-        if isinstance(chat_id, int) and chat_id > 0 and U(chat_id)["setup"] == "ready":
-            hub_schedule(chat_id)
-    except Exception:
-        pass
     return sent
+
+
+def _is_screen(chat_id, mid):
+    try:
+        return any(e[0] == mid and e[2] == "screen" for e in U(chat_id)["trail"])
+    except Exception:
+        return False
+
+
+def _edit_message_text(text, chat_id=None, message_id=None, *a, **kw):
+    """Сообщение с картинкой правится через подпись, обычное через текст: остальной код об этом не знает."""
+    if chat_id is not None and message_id is not None and _is_screen(chat_id, message_id):
+        return _edit_screen(text, chat_id, message_id, kw)
+    try:
+        return _raw_edit_text(text, chat_id, message_id, *a, **kw)
+    except Exception as e:
+        if "no text in the message" in str(e) and chat_id is not None:
+            return _edit_screen(text, chat_id, message_id, kw)
+        raise
 
 
 bot.send_message = _send_message
 bot.send_voice = _send_voice
+bot.edit_message_text = _edit_message_text
 
 
-# ---------------------------------------------------------------- Réka: картинка, гардероб, токены
+# ---------------------------------------------------------------- картинка Réka и прогресс в каждом сообщении
 try:
-    from PIL import Image, ImageDraw
-except Exception:                         # без Pillow бот работает, просто без картинки
-    Image = ImageDraw = None
+    from PIL import Image
+except Exception:                         # без Pillow картинка отправляется как есть, без проверки размера
+    Image = None
 
 import io
+import base64
 import html as _html
-import math as _math
 
 ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
-UPLOAD_DIR = os.path.join(DATA_DIR, "assets")          # картинки, присланные боту в Telegram: переживают перезапуск вместе с DATA_DIR
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.join(DATA_DIR, "assets")          # картинка, присланная боту в Telegram: живёт в DATA_DIR
 ADMIN_FILE = os.path.join(DATA_DIR, "admin.txt")
-CANVAS = 768                              # слои — квадраты 768×768 с прозрачностью, друг под другом
-OUT_SIZE = 640
-SLOT_ORDER = ["bg", "outfit", "face", "hat", "acc"]          # порядок наложения: фон → Réka → одежда → очки → шапка → аксессуар
-SLOT_NAMES = {
-    "ru": {"bg": "Фон", "outfit": "Одежда", "face": "Очки", "hat": "Голова", "acc": "Аксессуар"},
-    "uk": {"bg": "Тло", "outfit": "Одяг", "face": "Окуляри", "hat": "Голова", "acc": "Аксесуар"},
-    "en": {"bg": "Background", "outfit": "Outfit", "face": "Glasses", "hat": "Head", "acc": "Accessory"},
-}
-# id, слот, цена, эмодзи, названия
-ITEMS = [
-    ("bg_mint", "bg", 15, "🌿", {"ru": "Мятный фон", "uk": "М'ятне тло", "en": "Mint background"}),
-    ("bg_sunset", "bg", 25, "🌇", {"ru": "Закат", "uk": "Захід", "en": "Sunset"}),
-    ("bg_night", "bg", 35, "🌃", {"ru": "Ночной Будапешт", "uk": "Нічний Будапешт", "en": "Budapest at night"}),
-    ("of_scarf", "outfit", 20, "🧣", {"ru": "Шарф", "uk": "Шарф", "en": "Scarf"}),
-    ("of_hoodie", "outfit", 35, "🧥", {"ru": "Худи", "uk": "Худі", "en": "Hoodie"}),
-    ("of_dress", "outfit", 50, "👗", {"ru": "Платье", "uk": "Сукня", "en": "Dress"}),
-    ("gl_round", "face", 20, "👓", {"ru": "Круглые очки", "uk": "Круглі окуляри", "en": "Round glasses"}),
-    ("gl_star", "face", 30, "🌟", {"ru": "Звёздные очки", "uk": "Зоряні окуляри", "en": "Star glasses"}),
-    ("hat_bow", "hat", 15, "🎀", {"ru": "Бант", "uk": "Бант", "en": "Bow"}),
-    ("hat_beret", "hat", 25, "🎨", {"ru": "Берет", "uk": "Берет", "en": "Beret"}),
-    ("hat_crown", "hat", 60, "👑", {"ru": "Корона", "uk": "Корона", "en": "Crown"}),
-    ("ac_flower", "acc", 15, "🌸", {"ru": "Цветок", "uk": "Квітка", "en": "Flower"}),
-    ("ac_headph", "acc", 30, "🎧", {"ru": "Наушники", "uk": "Навушники", "en": "Headphones"}),
-]
-ITEM_BY_ID = {it[0]: it for it in ITEMS}
-REWARD_PASS, REWARD_PERFECT, REWARD_REPEAT, REWARD_REVIEW = 30, 10, 15, 10
-SHOP_ENABLED = False                      # магазин и кастомизация выключены; токены копятся тихо, включить: True
-_render_cache = {}
+try:                                      # reka_img.py: картинка прямо в коде, чтобы не загружать файлы на GitHub
+    import reka_img as _reka_img
+except Exception:
+    _reka_img = None
+_reka_cache = {"key": None, "data": None}
+_reka_fid = None                          # file_id картинки в Telegram: повторно её не загружаем
 
 
-def item_name(item, lang):
-    return item[4].get(lang) or item[4]["en"]
-
-
-def _star(cx, cy, r1, r2, n=5):
-    pts = []
-    for i in range(n * 2):
-        r = r1 if i % 2 == 0 else r2
-        a = -_math.pi / 2 + i * _math.pi / n
-        pts.append((cx + r * _math.cos(a), cy + r * _math.sin(a)))
-    return pts
-
-
-def _fit_square(img):
-    """Любая пропорция вписывается в квадрат без растягивания, лишнее место прозрачное."""
-    if img.size == (CANVAS, CANVAS):
-        return img
-    k = CANVAS / max(img.size)
-    w, h = max(1, round(img.size[0] * k)), max(1, round(img.size[1] * k))
-    out = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
-    out.paste(img.resize((w, h), Image.LANCZOS), ((CANVAS - w) // 2, (CANVAS - h) // 2))
-    return out
-
-
-def _layer_file(name):
-    root = os.path.dirname(ASSET_DIR)                    # можно просто положить PNG рядом с bot.py, без папок
-    for p in (os.path.join(UPLOAD_DIR, name + ".png"), os.path.join(ASSET_DIR, name + ".png"), os.path.join(ASSET_DIR, "items", name + ".png"), os.path.join(root, name + ".png")):
-        if os.path.isfile(p):
-            try:
-                return _fit_square(Image.open(p).convert("RGBA"))
-            except Exception:
-                return None
+def _reka_file():
+    for base in (UPLOAD_DIR, ASSET_DIR, ROOT_DIR):
+        for ext in (".jpg", ".jpeg", ".png"):
+            p = os.path.join(base, "reka" + ext)
+            if os.path.isfile(p):
+                return p
     return None
 
 
-def _draw_layer(name):
-    """Запасная картинка слоя, если нет своего PNG. Рисуется в двойном размере и сжимается: так гладкие края."""
-    S = 2
-    im = Image.new("RGBA", (CANVAS * S, CANVAS * S), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-
-    def P(*v):
-        return [x * S for x in v]
-
-    def pts(lst):
-        return [(x * S, y * S) for x, y in lst]
-
-    def grad(top, bot):
-        for y in range(CANVAS * S):
-            t = y / (CANVAS * S - 1)
-            d.line([(0, y), (CANVAS * S, y)], fill=tuple(int(top[i] + (bot[i] - top[i]) * t) for i in range(3)) + (255,))
-
-    if name == "bg_default":
-        grad((246, 244, 239), (224, 231, 240))
-    elif name == "bg_mint":
-        grad((200, 238, 220), (120, 200, 190))
-    elif name == "bg_sunset":
-        grad((255, 176, 104), (246, 108, 152))
-    elif name == "bg_night":
-        grad((14, 20, 62), (44, 66, 126))
-        rnd = random.Random(7)
-        for _ in range(40):
-            x, y, r = rnd.randint(10, 758), rnd.randint(10, 420), rnd.choice((2, 2, 3, 4))
-            d.ellipse(P(x - r, y - r, x + r, y + r), fill=(255, 245, 200, 255))
-    elif name == "base":
-        hair, line, orange = (251, 251, 253, 255), (205, 210, 220, 255), (255, 140, 50, 255)
-        d.ellipse(P(219, 140, 549, 520), fill=hair, outline=line, width=4 * S)
-        d.rectangle(P(360, 400, 408, 450), fill=(222, 226, 234, 255))
-        d.rounded_rectangle(P(304, 440, 464, 700), radius=40 * S, fill=(236, 238, 244, 255), outline=line, width=4 * S)
-        d.line(P(384, 452, 384, 700), fill=orange, width=6 * S)
-        d.line(P(304, 520, 464, 520), fill=orange, width=4 * S)
-        d.ellipse(P(259, 175, 509, 425), fill=(246, 246, 250, 255), outline=line, width=4 * S)
-        d.polygon(pts([(262, 282), (296, 200), (384, 176), (472, 200), (506, 282), (470, 244), (432, 262), (384, 238), (336, 262), (298, 244)]), fill=hair)
-        d.arc(P(259, 175, 509, 425), 200, 340, fill=line, width=4 * S)
-        d.ellipse(P(237, 287, 273, 323), fill=orange)
-        d.ellipse(P(495, 287, 531, 323), fill=orange)
-        for ex in (350, 418):
-            d.ellipse(P(ex - 11, 308, ex + 11, 336), fill=orange)
-            d.ellipse(P(ex - 4, 313, ex + 2, 319), fill=(255, 255, 255, 255))
-        d.arc(P(362, 336, 406, 368), 20, 160, fill=(190, 90, 40, 255), width=4 * S)
-        d.arc(P(440, 250, 500, 340), 280, 80, fill=orange, width=3 * S)
-    elif name == "of_scarf":
-        red = (205, 45, 55, 255)
-        d.rounded_rectangle(P(326, 418, 442, 460), radius=18 * S, fill=red)
-        d.polygon(pts([(402, 450), (434, 450), (446, 548), (412, 552)]), fill=red)
-        d.line(P(406, 500, 442, 498), fill=(255, 255, 255, 255), width=5 * S)
-    elif name == "of_hoodie":
-        d.rounded_rectangle(P(292, 440, 476, 700), radius=46 * S, fill=(76, 114, 204, 255))
-        d.ellipse(P(318, 410, 450, 476), outline=(56, 90, 175, 255), width=14 * S)
-        d.rounded_rectangle(P(330, 590, 438, 650), radius=18 * S, outline=(56, 90, 175, 255), width=5 * S)
-        d.line(P(364, 470, 364, 540), fill=(255, 255, 255, 255), width=4 * S)
-        d.line(P(404, 470, 404, 540), fill=(255, 255, 255, 255), width=4 * S)
-    elif name == "of_dress":
-        d.polygon(pts([(322, 440), (446, 440), (524, 700), (244, 700)]), fill=(152, 92, 204, 255))
-        d.rectangle(P(322, 488, 446, 506), fill=(255, 140, 50, 255))
-        d.ellipse(P(374, 484, 394, 510), fill=(255, 215, 90, 255))
-    elif name == "gl_round":
-        for ex in (350, 418):
-            d.ellipse(P(ex - 30, 292, ex + 30, 352), outline=(38, 38, 50, 255), width=6 * S)
-        d.line(P(380, 322, 388, 322), fill=(38, 38, 50, 255), width=5 * S)
-    elif name == "gl_star":
-        for ex in (350, 418):
-            d.polygon(pts(_star(ex, 322, 34, 15)), fill=(255, 214, 64, 235), outline=(60, 50, 20, 255))
-    elif name == "hat_bow":
-        pink = (245, 120, 170, 255)
-        d.polygon(pts([(478, 196), (436, 164), (436, 228)]), fill=pink)
-        d.polygon(pts([(478, 196), (520, 164), (520, 228)]), fill=pink)
-        d.ellipse(P(466, 184, 490, 208), fill=(214, 80, 135, 255))
-    elif name == "hat_beret":
-        d.ellipse(P(286, 142, 482, 222), fill=(150, 32, 52, 255))
-        d.ellipse(P(378, 130, 392, 148), fill=(110, 20, 38, 255))
-    elif name == "hat_crown":
-        d.polygon(pts([(312, 192), (312, 128), (348, 166), (384, 112), (420, 166), (456, 128), (456, 192)]), fill=(242, 192, 52, 255), outline=(176, 128, 20, 255))
-        for cx in (330, 384, 438):
-            d.ellipse(P(cx - 7, 170, cx + 7, 184), fill=(210, 50, 70, 255))
-    elif name == "ac_flower":
-        for k in range(5):
-            a = k * 2 * _math.pi / 5
-            cx, cy = 506 + 18 * _math.cos(a), 214 + 18 * _math.sin(a)
-            d.ellipse(P(cx - 14, cy - 14, cx + 14, cy + 14), fill=(247, 140, 178, 255))
-        d.ellipse(P(497, 205, 515, 223), fill=(255, 214, 70, 255))
-    elif name == "ac_headph":
-        d.arc(P(257, 150, 511, 410), 195, 345, fill=(40, 40, 52, 255), width=14 * S)
-        for x0 in (236, 497):
-            d.rounded_rectangle(P(x0, 276, x0 + 36, 342), radius=12 * S, fill=(40, 40, 52, 255))
-            d.ellipse(P(x0 + 9, 298, x0 + 27, 320), outline=(255, 140, 50, 255), width=3 * S)
-    else:
+def reka_data():
+    """Байты картинки Réka (квадрат) или None, если её нет нигде."""
+    p = _reka_file()
+    try:
+        key = (p, os.path.getmtime(p)) if p else ("embedded", bool(_reka_img))
+        if _reka_cache["key"] == key:
+            return _reka_cache["data"]
+        if p:
+            with open(p, "rb") as f:
+                data = f.read()
+        elif _reka_img and getattr(_reka_img, "DATA", None):
+            data = base64.b64decode(_reka_img.DATA)
+        else:
+            data = None
+        _reka_cache["key"], _reka_cache["data"] = key, data
+        return data
+    except Exception as e:
+        print(f"Не удалось прочитать картинку Réka: {e}")
         return None
-    return im.resize((CANVAS, CANVAS), Image.LANCZOS)
 
 
-def _layer(name, fallback=None):
-    return _layer_file(name) or _draw_layer(name) or (_draw_layer(fallback) if fallback else None)
+def screen_header(uid):
+    """Три строки над каждым сообщением: где мы, сколько сделано, когда тест."""
+    lang = user_lang(uid)
+    u = U(uid)
+    c = u["cycle"]
+    if not c:
+        return ""
+    learned, claimed = set(u["learned"]), set(u["claimed"])
+    credited = set(c["credited"])
+    s = stage_index(c)
+    if s is None:
+        return T(lang, "hub_review") + "\n" + T(lang, "hub_total").format(n=len(learned), t=N_VERBS)
+    plan = sorted(set(c["plan"]) | claimed)
+    k = len([v for v in plan if v in claimed or v in learned or v in credited])
+    fill = round(12 * k / max(1, len(plan)))
+    test = T(lang, "hub_test_today") if c["state"] == "test" else T(lang, "hub_test_in").format(n=max(1, c["max_days"] - c["days"] + 1))
+    return "\n".join([
+        T(lang, "hub_stage").format(s=s + 1, S=len(STAGES), name=stage_name(s, lang)),
+        "▰" * fill + "▱" * (12 - fill) + f" {k}/{len(plan)}  ·  ⏳ {len(plan) - k}",
+        test,
+    ])
 
 
-def worn_key(worn):
-    return "|".join(f"{s}={worn[s]}" for s in SLOT_ORDER if worn.get(s) in ITEM_BY_ID)
+def _join_caption(head, text, parse_mode):
+    if not head:
+        return text
+    if parse_mode == "MarkdownV2":
+        head = escape_markdown_v2(head)
+    elif parse_mode == "HTML":
+        head = _html.escape(head)
+    return head + "\n\n" + text
 
 
-def render_reka(worn):
-    """Собирает Réka из слоёв: фон, она сама, потом надетое. Любое число предметов, по одному на слот."""
-    if Image is None:
+def _send_screen(chat_id, text, kw):
+    """Сообщение с картинкой Réka сверху и прогрессом. Не вышло или не влезло в подпись: вернём None, уйдёт обычный текст."""
+    global _reka_fid
+    u = U(chat_id)
+    if u["setup"] != "ready" or not u["cycle"]:
         return None
-    key = worn_key(worn or {})
-    data = _render_cache.get(key)
-    if data is None:
+    data = reka_data()
+    if not data:
+        return None
+    cap = _join_caption(screen_header(chat_id), text, kw.get("parse_mode"))
+    if len(cap) > 1024:
+        return None
+    kw.pop("disable_web_page_preview", None)
+    for src in ([_reka_fid] if _reka_fid else []) + [None]:
         try:
-            wid = {s: (worn or {}).get(s) for s in SLOT_ORDER}
-            img = _layer(wid["bg"], "bg_default") if wid["bg"] in ITEM_BY_ID else _layer("bg_default")
-            img = img.copy()
-            img.alpha_composite(_layer("reka", "base") if _layer_file("reka") else _layer("base"))
-            for slot in SLOT_ORDER[1:]:
-                if wid[slot] in ITEM_BY_ID:
-                    lay = _layer(wid[slot])
-                    if lay is not None:
-                        img.alpha_composite(lay)
-            img = img.convert("RGB").resize((OUT_SIZE, OUT_SIZE), Image.LANCZOS)
-            buf = io.BytesIO()
-            img.save(buf, "JPEG", quality=90)
-            data = buf.getvalue()
-            if len(_render_cache) > 64:
-                _render_cache.clear()
-            _render_cache[key] = data
+            photo = src
+            if photo is None:
+                photo = io.BytesIO(data)
+                photo.name = "reka.jpg"
+            sent = bot.send_photo(chat_id, photo, caption=cap, **kw)
+            try:
+                _reka_fid = sent.photo[-1].file_id
+            except Exception:
+                pass
+            return sent
         except Exception as e:
-            print(f"Не удалось собрать картинку Réka: {e}")
-            return None
-    buf = io.BytesIO(data)
-    buf.name = "reka.jpg"
-    return buf
+            if src is None:
+                print(f"Картинка не отправилась, шлю текстом: {e}")
+                return None
+            _reka_fid = None                  # file_id устарел: загрузим картинку заново
+    return None
 
 
-PT["ru"].update({
-    "hub_stage": "📍 Этап {s} из {S} «{name}»", "hub_review": "🔁 Повторение выученного",
-    "hub_counts": "✅ Закреплено: {a}  ·  👋 Знал сам: {b}  ·  ⏳ Осталось: {c}",
-    "hub_legend": "✅ выучил · 👋 знал · ▫️ впереди",
-    "hub_test_today": "🧪 Тест сегодня: жми «➡️ Дальше»", "hub_test_in": "🧪 Тест через {n} дн.",
-    "hub_total": "Всего выучено: {n} из {t}", "hub_next": "Следующий этап: «{name}»", "hub_tokens": "🪙 Токены: {n}  ·  /shop", "hub_hint": "👇 Жми «➡️ Дальше» или просто жди: я сама пришлю глаголы.",
-    "reward": "🪙 +{n} токенов (всего {t}). Потрать на наряды для Réka: /shop",
-    "shop_head": "🛍 Гардероб Réka\n🪙 Токены: {n}\nНадето: {worn}\n\nНажми на вещь: купить и надеть, потом надеть/снять. В каждом слоте одна вещь, слоты работают вместе.",
-    "shop_none": "ничего", "shop_off": "Всё снято", "shop_bought": "Куплено и надето!", "shop_need": "Не хватает токенов: нужно ещё {n}",
-    "shop_wear": "Надето", "shop_take": "Снято", "shop_unequip": "👤 Снять всё", "shop_stale": "Это старое окно, открой /shop заново",
-    "shop_cmd": "Гардероб и токены Réka",
-})
-PT["uk"].update({
-    "hub_stage": "📍 Етап {s} з {S} «{name}»", "hub_review": "🔁 Повторення вивченого",
-    "hub_counts": "✅ Закріплено: {a}  ·  👋 Знав сам: {b}  ·  ⏳ Лишилось: {c}",
-    "hub_legend": "✅ вивчив · 👋 знав · ▫️ попереду",
-    "hub_test_today": "🧪 Тест сьогодні: тисни «➡️ Далі»", "hub_test_in": "🧪 Тест через {n} дн.",
-    "hub_total": "Усього вивчено: {n} з {t}", "hub_next": "Наступний етап: «{name}»", "hub_tokens": "🪙 Токени: {n}  ·  /shop", "hub_hint": "👇 Тисни «➡️ Далі» або просто чекай: я сама пришлю дієслова.",
-    "reward": "🪙 +{n} токенів (усього {t}). Витрать на наряди для Réka: /shop",
-    "shop_head": "🛍 Гардероб Réka\n🪙 Токени: {n}\nНадіто: {worn}\n\nНатисни на річ: купити й вдягнути, потім вдягнути/зняти. У кожному слоті одна річ, слоти працюють разом.",
-    "shop_none": "нічого", "shop_off": "Усе знято", "shop_bought": "Куплено й вдягнено!", "shop_need": "Не вистачає токенів: треба ще {n}",
-    "shop_wear": "Вдягнено", "shop_take": "Знято", "shop_unequip": "👤 Зняти все", "shop_stale": "Це старе вікно, відкрий /shop знову",
-    "shop_cmd": "Гардероб і токени Réka",
-})
-PT["en"].update({
-    "hub_stage": "📍 Stage {s} of {S} “{name}”", "hub_review": "🔁 Reviewing what you learned",
-    "hub_counts": "✅ Locked in: {a}  ·  👋 Already knew: {b}  ·  ⏳ Left: {c}",
-    "hub_legend": "✅ learned · 👋 knew · ▫️ ahead",
-    "hub_test_today": "🧪 Test today: tap “➡️ Next”", "hub_test_in": "🧪 Test in {n} d",
-    "hub_total": "Learned in total: {n} of {t}", "hub_next": "Next stage: “{name}”", "hub_tokens": "🪙 Tokens: {n}  ·  /shop", "hub_hint": "👇 Tap “➡️ Next” or just wait: I send the verbs by myself.",
-    "reward": "🪙 +{n} tokens ({t} total). Spend them on outfits for Réka: /shop",
-    "shop_head": "🛍 Réka's wardrobe\n🪙 Tokens: {n}\nWearing: {worn}\n\nTap an item: buy and wear it, then wear/take off. One item per slot, and slots work together.",
-    "shop_none": "nothing", "shop_off": "Everything taken off", "shop_bought": "Bought and worn!", "shop_need": "Not enough tokens: {n} more needed",
-    "shop_wear": "Worn", "shop_take": "Taken off", "shop_unequip": "👤 Take everything off", "shop_stale": "That window is old, open /shop again",
-    "shop_cmd": "Réka's wardrobe and tokens",
-})
+def _edit_screen(text, chat_id, message_id, kw):
+    cap = _join_caption(screen_header(chat_id), text, kw.get("parse_mode"))
+    if len(cap) > 1024:
+        cap = text[:1024]
+    return bot.edit_message_caption(caption=cap, chat_id=chat_id, message_id=message_id,
+                                    parse_mode=kw.get("parse_mode"), reply_markup=kw.get("reply_markup"))
 
 
-def hub_caption(uid):
+def send_stage(uid):
+    """Первый день этапа: что за этап и что надо выучить."""
+    bot.send_message(uid, stage_text(uid))
+
+
+def progress_full(uid):
+    """Полный список этапа со значками: /progress."""
     lang = user_lang(uid)
     u = U(uid)
     c = u["cycle"]
     learned, claimed = set(u["learned"]), set(u["claimed"])
     credited = set(c["credited"]) if c else set()
     s = stage_index(c) if c else None
+    if not c or s is None:
+        return T(lang, "hub_total").format(n=len(learned), t=N_VERBS)
+    plan = sorted(set(c["plan"]) | claimed)
     lines = []
-    if c and s is not None:
-        plan = sorted(set(c["plan"]) | claimed)           # «знал сам» показываем в том же списке, но отдельным значком
-        lines.append(T(lang, "hub_stage").format(s=s + 1, S=len(STAGES), name=stage_name(s, lang)))
-        knew = [v for v in plan if v in claimed]
-        done = [v for v in plan if v not in claimed and (v in learned or v in credited)]
-        left = len(plan) - len(knew) - len(done)
-        k = len(knew) + len(done)
-        fill = round(12 * k / max(1, len(plan)))
-        lines.append("▰" * fill + "▱" * (12 - fill) + f" {k}/{len(plan)}")
-        lines.append(T(lang, "hub_counts").format(a=len(done), b=len(knew), c=left))
-        lines.append("")
-        lines.append("<blockquote expandable>")
-        for v in plan:
-            mark = "👋" if v in claimed else ("✅" if (v in learned or v in credited) else "▫️")
-            lines.append(f"{mark} {_html.escape(VERB_COURSE[v][0])} — {_html.escape(v_tr(lang, v))}")
-        lines.append(T(lang, "hub_legend"))
-        lines.append("</blockquote>")
-        if c["state"] == "test":
-            lines.append(T(lang, "hub_test_today"))
-        else:
-            lines.append(T(lang, "hub_test_in").format(n=max(1, c["max_days"] - c["days"] + 1)))
-        if s + 1 < len(STAGES):
-            lines.append(T(lang, "hub_next").format(name=stage_name(s + 1, lang)))
-    else:
-        lines.append(T(lang, "hub_review"))
-        lines.append(T(lang, "hub_total").format(n=len(learned), t=N_VERBS))
-    lines.append(T(lang, "hub_total").format(n=len(learned), t=N_VERBS) if s is not None else "")
-    if SHOP_ENABLED:
-        lines.append(T(lang, "hub_tokens").format(n=u["tokens"]))
-    lines.append(T(lang, "hub_hint"))
-    text = "\n".join(l for i, l in enumerate(lines) if l != "" or (i and lines[i - 1] != ""))
-    if len(re.sub(r"<[^>]+>", "", text)) > 1000:       # подпись к фото не длиннее 1024 знаков: тогда без списка
-        text = re.sub(r"<blockquote expandable>.*?</blockquote>\n?", "", text, flags=re.S)
-    return text.strip()
+    for v in plan:
+        mark = "👋" if v in claimed else ("✅" if (v in learned or v in credited) else "▫️")
+        lines.append(f"{mark} {VERB_COURSE[v][0]} — {v_tr(lang, v)}")
+    lines += [T(lang, "hub_legend"), "", T(lang, "hub_total").format(n=len(learned), t=N_VERBS)]
+    if s + 1 < len(STAGES):
+        lines.append(T(lang, "hub_next").format(name=stage_name(s + 1, lang)))
+    return "\n".join(lines)
 
 
-_hub_lock = threading.RLock()
-_hub_busy = threading.local()
+PT["ru"].update({
+    "hub_stage": "📍 Этап {s} из {S} «{name}»", "hub_review": "🔁 Повторение выученного",
+    "hub_legend": "✅ выучил · 👋 знал · ▫️ впереди", "hub_test_today": "🧪 Тест сегодня: жми «➡️ Дальше»",
+    "hub_test_in": "🧪 Тест через {n} дн.", "hub_total": "Всего выучено: {n} из {t}", "hub_next": "Следующий этап: «{name}»",
+})
+PT["uk"].update({
+    "hub_stage": "📍 Етап {s} з {S} «{name}»", "hub_review": "🔁 Повторення вивченого",
+    "hub_legend": "✅ вивчив · 👋 знав · ▫️ попереду", "hub_test_today": "🧪 Тест сьогодні: тисни «➡️ Далі»",
+    "hub_test_in": "🧪 Тест через {n} дн.", "hub_total": "Усього вивчено: {n} з {t}", "hub_next": "Наступний етап: «{name}»",
+})
+PT["en"].update({
+    "hub_stage": "📍 Stage {s} of {S} “{name}”", "hub_review": "🔁 Reviewing what you learned",
+    "hub_legend": "✅ learned · 👋 knew · ▫️ ahead", "hub_test_today": "🧪 Test today: tap “➡️ Next”",
+    "hub_test_in": "🧪 Test in {n} d", "hub_total": "Learned in total: {n} of {t}", "hub_next": "Next stage: “{name}”",
+})
 
 
-HUB_DELAY = 1.5                           # секунд тишины после последнего сообщения, потом карточка уезжает в самый низ
-_hub_last = {}                            # chat_id -> карточка сейчас последнее сообщение в чате
-_hub_timers = {}
-
-
-def refresh_hub(uid, force=False, bottom=False):
-    """Карточка с картинкой Réka и прогрессом. Обычно правится на месте; bottom=True пересоздаёт её последним сообщением чата."""
-    u = U(uid)
-    if u["setup"] != "ready" or not u["cycle"] or getattr(_hub_busy, "on", False):
-        return
-    with _hub_lock:
-        _hub_busy.on = True
-        try:
-            cap = hub_caption(uid)
-            wk = worn_key(u["worn"])
-            sig = cap + "#" + wk
-            mid, kind = u.get("pin_id"), u.get("hub_kind")
-            if bottom and mid and kind in ("photo", "text") and _hub_last.get(uid) and sig == u.get("hub_sig") and not force:
-                return
-            if mid and kind in ("photo", "text") and not (bottom and not _hub_last.get(uid)):
-                if sig == u.get("hub_sig") and not force:
-                    return
-                img = render_reka(u["worn"])
-                try:
-                    if kind == "photo" and img is not None and wk != u.get("hub_img"):
-                        bot.edit_message_media(InputMediaPhoto(img, caption=cap, parse_mode="HTML"), uid, mid)
-                    elif kind == "photo":
-                        bot.edit_message_caption(caption=cap, chat_id=uid, message_id=mid, parse_mode="HTML")
-                    else:
-                        bot.edit_message_text(cap, uid, mid, parse_mode="HTML")
-                    u["hub_sig"], u["hub_img"] = sig, wk
-                    save_course()
-                    return
-                except Exception as e:
-                    if "not modified" in str(e):
-                        u["hub_sig"], u["hub_img"] = sig, wk
-                        return
-                    print(f"Карточка не обновилась, создаю заново: {e}")
-            img = render_reka(u["worn"])
-            old = mid
-            if img is not None:
-                sent = bot.send_photo(uid, img, caption=cap, parse_mode="HTML", disable_notification=True)
-                u["hub_kind"] = "photo"
-            else:
-                sent = _raw_send_message(uid, cap, parse_mode="HTML", disable_notification=True)
-                u["hub_kind"] = "text"
-            new = getattr(sent, "message_id", None)
-            u["pin_id"], u["hub_sig"], u["hub_img"] = new, sig, wk
-            _hub_last[uid] = True
-            save_course()
-            try:
-                if old:
-                    bot.delete_message(uid, old)
-            except Exception:
-                pass
-        except Exception as e:
-            print(f"Ошибка карточки прогресса: {e}")
-        finally:
-            _hub_busy.on = False
-
-
-def _hub_fire(chat_id):
-    _hub_timers.pop(chat_id, None)
-    try:
-        refresh_hub(chat_id, bottom=True)
-    except Exception as e:
-        print(f"Карточка: {e}")
-
-
-def hub_schedule(chat_id):
-    """Что-то пришло после карточки: она больше не внизу. Когда всё стихнет, карточка приедет вниз сама."""
-    _hub_last[chat_id] = False
-    if HUB_DELAY <= 0:
-        _hub_fire(chat_id)
-        return
-    t = _hub_timers.pop(chat_id, None)
-    if t:
-        t.cancel()
-    t = threading.Timer(HUB_DELAY, _hub_fire, args=(chat_id,))
-    t.daemon = True
-    _hub_timers[chat_id] = t
-    t.start()
-
-
-def send_stage(uid):
-    """Первый день этапа: объясняем, что началось. Карточка с прогрессом сама приедет вниз."""
-    bot.send_message(uid, stage_text(uid))
-
-
-# ---------------------------------------------------------------- картинки через Telegram, без GitHub
+# ---------------------------------------------------------------- картинка Réka через Telegram
 def _admin_id():
     try:
         with open(ADMIN_FILE, encoding="utf-8") as f:
@@ -3082,165 +2891,47 @@ def _is_admin(uid):
     return adm == uid
 
 
-SETREKA_HELP = (
-    "Пришли PNG ФАЙЛОМ (не как фото: у фото пропадает прозрачность) и в подписи напиши:\n"
-    "/setreka  — это сама Réka\n"
-    "/setreka bg_default  — фон по умолчанию\n"
-    "/setreka hat_crown  — предмет. Названия: " + ", ".join(it[0] for it in ITEMS) + "\n"
-    "Квадрат 1024×1024, все слои одного размера и на одном месте."
-)
+SETREKA_HELP = "Пришли квадратную картинку (например 1024×1024) с подписью /setreka: фото или файл, неважно."
 
 
 @bot.message_handler(commands=["setreka"])
 def cmd_setreka(message):
-    if not _is_admin(message.from_user.id):
-        return
-    bot.send_message(message.chat.id, SETREKA_HELP)
+    if _is_admin(message.from_user.id):
+        bot.send_message(message.chat.id, SETREKA_HELP)
 
 
 @bot.message_handler(content_types=["document", "photo"])
-def on_asset_upload(message):
+def on_reka_upload(message):
+    global _reka_fid
     uid = message.from_user.id
-    cap = (message.caption or "").strip()
-    if not cap.startswith("/setreka"):
+    if not (message.caption or "").strip().startswith("/setreka") or not _is_admin(uid):
         return
-    if not _is_admin(uid):
-        return
-    parts = cap.split()
-    name = parts[1] if len(parts) > 1 else "reka"
-    if name not in ITEM_BY_ID and name not in ("reka", "bg_default"):
-        bot.send_message(message.chat.id, "Не знаю такое имя.\n\n" + SETREKA_HELP)
-        return
-    is_photo = message.content_type == "photo" if hasattr(message, "content_type") else False
     try:
+        is_photo = getattr(message, "content_type", "") == "photo"
         fid = message.photo[-1].file_id if is_photo else message.document.file_id
         data = bot.download_file(bot.get_file(fid).file_path)
-        img = Image.open(io.BytesIO(data)).convert("RGBA")
-        if is_photo and not name.startswith("bg"):
-            bot.send_message(message.chat.id, "Это сжатое фото: фон не станет прозрачным. Пришли тот же PNG как ФАЙЛ (скрепка → Файл).")
-            return
-        if max(img.size) > 2048:
-            k = 2048 / max(img.size)
-            img = img.resize((round(img.size[0] * k), round(img.size[1] * k)), Image.LANCZOS)
+        if Image is not None:
+            img = Image.open(io.BytesIO(data))
+            w, h = img.size
+            if abs(w - h) > max(2, w // 100):
+                bot.send_message(message.chat.id, f"Картинка {w}×{h}, а нужна квадратная. " + SETREKA_HELP)
+                return
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, "JPEG", quality=90)
+            data = buf.getvalue()
         os.makedirs(UPLOAD_DIR, exist_ok=True)
-        img.save(os.path.join(UPLOAD_DIR, name + ".png"), "PNG")
+        for ext in (".jpg", ".jpeg", ".png"):
+            try:
+                os.remove(os.path.join(UPLOAD_DIR, "reka" + ext))
+            except OSError:
+                pass
+        with open(os.path.join(UPLOAD_DIR, "reka.jpg"), "wb") as f:
+            f.write(data)
     except Exception as e:
         bot.send_message(message.chat.id, f"Не получилось прочитать картинку: {e}")
         return
-    _render_cache.clear()
-    for k in list(_store):
-        _store[k]["hub_img"] = ""                        # у всех карточка перерисуется с новой картинкой
-    save_course()
-    bot.send_message(message.chat.id, f"Готово: {name}.png сохранён. Карточка обновится сама.")
-    refresh_hub(uid, force=True)
-
-
-# ---------------------------------------------------------------- магазин
-def _worn_names(uid, lang):
-    u = U(uid)
-    names = [item_name(ITEM_BY_ID[u["worn"][s]], lang) for s in SLOT_ORDER if u["worn"].get(s) in ITEM_BY_ID]
-    return ", ".join(names) or T(lang, "shop_none")
-
-
-def shop_markup(uid):
-    lang = user_lang(uid)
-    u = U(uid)
-    kb = InlineKeyboardMarkup()
-    row = []
-    for idx, it in enumerate(ITEMS):
-        iid, slot, price, emoji = it[0], it[1], it[2], it[3]
-        if u["worn"].get(slot) == iid:
-            label = f"✅ {emoji} {item_name(it, lang)}"
-        elif iid in u["owned"]:
-            label = f"{emoji} {item_name(it, lang)}"
-        else:
-            label = f"{emoji} {item_name(it, lang)} · {price}🪙"
-        row.append(InlineKeyboardButton(label, callback_data=f"sh:i:{idx}"))
-        if len(row) == 2:
-            kb.row(*row)
-            row = []
-    if row:
-        kb.row(*row)
-    kb.row(InlineKeyboardButton(T(lang, "shop_unequip"), callback_data="sh:x"))
-    return kb
-
-
-def shop_caption(uid):
-    lang = user_lang(uid)
-    return T(lang, "shop_head").format(n=U(uid)["tokens"], worn=_worn_names(uid, lang))
-
-
-@bot.message_handler(commands=["shop", "wardrobe"])
-def cmd_shop(message):
-    if not SHOP_ENABLED:
-        return
-    uid = message.from_user.id
-    all_users.add(uid)
-    if U(uid)["setup"] != "ready":
-        start_onboarding(uid, message.chat.id)
-        return
-    img = render_reka(U(uid)["worn"])
-    if tidy_on(message.chat.id):
-        with _tidy_lock:
-            old = [it[0] for it in _tidy.get(message.chat.id, [])]
-            _tidy[message.chat.id] = []
-        _tidy_delete(message.chat.id, old)
-    if img is None:
-        sent = _raw_send_message(message.chat.id, shop_caption(uid), reply_markup=shop_markup(uid))
-    else:
-        sent = bot.send_photo(message.chat.id, img, caption=shop_caption(uid), reply_markup=shop_markup(uid))
-    tidy_track(message.chat.id, getattr(sent, "message_id", None), "card")
-
-
-@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("sh:"))
-def on_shop(call):
-    if not SHOP_ENABLED:
-        try:
-            bot.answer_callback_query(call.id)
-        except Exception:
-            pass
-        return
-    uid = call.from_user.id
-    lang = user_lang(uid)
-    u = U(uid)
-    toast = None
-    try:
-        parts = call.data.split(":")
-        if parts[1] == "x":
-            u["worn"] = {}
-            toast = T(lang, "shop_off")
-        else:
-            it = ITEMS[int(parts[2])]
-            iid, slot, price = it[0], it[1], it[2]
-            if iid not in u["owned"]:
-                if u["tokens"] < price:
-                    bot.answer_callback_query(call.id, T(lang, "shop_need").format(n=price - u["tokens"]))
-                    return
-                u["tokens"] -= price
-                u["owned"].append(iid)
-                u["worn"][slot] = iid
-                toast = T(lang, "shop_bought")
-            elif u["worn"].get(slot) == iid:
-                u["worn"].pop(slot, None)
-                toast = T(lang, "shop_take")
-            else:
-                u["worn"][slot] = iid
-                toast = T(lang, "shop_wear")
-        save_course()
-        img = render_reka(u["worn"])
-        chat_id, mid = call.message.chat.id, call.message.message_id
-        if img is not None:
-            bot.edit_message_media(InputMediaPhoto(img, caption=shop_caption(uid)), chat_id, mid, reply_markup=shop_markup(uid))
-        else:
-            bot.edit_message_text(shop_caption(uid), chat_id, mid, reply_markup=shop_markup(uid))
-        refresh_hub(uid)
-    except Exception as e:
-        if "not modified" not in str(e):
-            print(f"Ошибка магазина: {e}")
-    try:
-        bot.answer_callback_query(call.id, toast)
-    except Exception:
-        pass
+    _reka_fid = None
+    bot.send_message(message.chat.id, "Готово: новая картинка Réka сохранена.")
 
 
 # ---------------------------------------------------------------- тест
@@ -3324,18 +3015,6 @@ def finish_test(uid, chat_id):
     u["claimed"] = []
     u["learned"] = sorted(learned)
     lines = [T(lang, "pass" if passed else "fail").format(r=r, n=n, need=need)]
-    reward = 0
-    if passed:
-        if c and c.get("review"):
-            reward = REWARD_REVIEW
-        elif c and c.get("repeat"):
-            reward = REWARD_REPEAT
-        else:
-            reward = REWARD_PASS + (REWARD_PERFECT if n and r == n else 0)
-    if reward:
-        u["tokens"] += reward
-        if SHOP_ENABLED:
-            lines.append(T(lang, "reward").format(n=reward, t=u["tokens"]))
     if bonus_q:
         lines.append(T(lang, "bonus_ok").format(n=len(bonus_right)))
         if bonus_bad:
@@ -3357,7 +3036,6 @@ def finish_test(uid, chat_id):
         u["day"]["state"] = "done"
     save_course()
     bot.send_message(chat_id, "\n".join(lines))
-    refresh_hub(uid)
 
 
 # ---------------------------------------------------------------- прогресс, настройки, онбординг
@@ -3717,7 +3395,7 @@ def cmd_progress(message):
     if U(uid)["setup"] != "ready":
         start_onboarding(uid, message.chat.id)
         return
-    refresh_hub(uid, force=True, bottom=True)
+    bot.send_message(message.chat.id, progress_full(uid))
 
 
 @bot.message_handler(commands=["settings", "modes"])
@@ -3783,8 +3461,6 @@ def tick_user(uid, now):
         save_course()
         bot.send_message(uid, T(lang, "next_hint"), reply_markup=next_keyboard(lang))
     a, _b = window(uid)
-    if now_min >= a * 60:
-        refresh_hub(uid)
     day = u["day"]
     if (not day or day["date"] != today.isoformat()) and now_min >= a * 60:
         day = build_day(uid, today)
