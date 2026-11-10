@@ -2,3 +2,4 @@ pytelegrambotapi
 groq
 apscheduler
 edge-tts
+pillow
