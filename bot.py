@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import functools
 import hashlib
 import json
 import math
@@ -32,6 +33,28 @@ from telebot.types import (
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
+
+_orig_message_handler = bot.message_handler
+
+
+def _tracked_message_handler(*a, **kw):
+    """Все обработчики сообщений запоминают входящее сообщение, чтобы потом убрать его из чата."""
+    deco = _orig_message_handler(*a, **kw)
+
+    def outer(f):
+        @functools.wraps(f)
+        def g(message, *x, **y):
+            try:
+                tidy_track(message.chat.id, message.message_id, "user")
+            except Exception:
+                pass
+            return f(message, *x, **y)
+        deco(g)
+        return f
+    return outer
+
+
+bot.message_handler = _tracked_message_handler
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY) if (Groq and GROQ_API_KEY) else None
@@ -1834,10 +1857,29 @@ def send_speech(chat_id, text):
         if info is not None and getattr(info, "file_id", None):
             _audio_ids[text] = info.file_id
             _save_audio_ids()
+            try:
+                os.remove(path)                    # файл больше не нужен: в Telegram есть file_id
+            except OSError:
+                pass
         return True
     except Exception as e:
         print(f"Ошибка озвучки «{text}»: {e}")
         return False
+
+
+def _purge_audio_cache(max_age=6 * 3600):
+    """Чистит папку с mp3: временные файлы не копятся."""
+    try:
+        now = time.time()
+        for name in os.listdir(AUDIO_DIR):
+            p = os.path.join(AUDIO_DIR, name)
+            if os.path.isfile(p) and now - os.path.getmtime(p) > max_age:
+                os.remove(p)
+    except OSError:
+        pass
+
+
+_purge_audio_cache(0)
 
 
 def audio_fail_text(lang):
@@ -1859,7 +1901,7 @@ _lock = threading.RLock()
 _USER_DEFAULTS = {
     "pace": PACE_DEFAULT, "win": "std", "setup": None, "claimed": [], "learned": [],
     "cycle": None, "day": None, "test": None, "ach": [], "marked": [], "page": 0, "wkn": 0,
-    "inten": "normal", "next_btn": True, "kb_sent": False,
+    "inten": "normal", "next_btn": True, "kb_sent": False, "tidy": True, "pin_id": None,
 }
 
 
@@ -2014,6 +2056,53 @@ PT = {
         "welcome_back": "{kao} Hi again! Verbs arrive by themselves. /progress shows your path.",
     },
 }
+
+
+PT["ru"].update({
+    "step_head": "➡️ Шаг {k} из {n} {bar}", "stage_line": "Этап {s} из {S} «{name}»",
+    "why_intro": "Что делаем: знакомимся с глаголами дня. Зачем: чтобы слова стали знакомыми.",
+    "why_ex": "Что делаем: смотрим глагол в живой фразе. Зачем: так он запоминается легче, чем в списке.",
+    "why_recall": "Что делаем: вспоминаем слова дня. Зачем: вспоминание закрепляет сильнее, чем перечитывание.",
+    "why_quiz": "Что делаем: проверяем себя. Зачем: каждый верный ответ идёт в зачёт недельного теста.",
+    "why_mix": "Что делаем: смешиваем с прошлыми глаголами. Зачем: чтобы старые не забывались.",
+    "why_form": "Что делаем: ставим глагол в форму «я». Зачем: форма в предложении, а не слово в вакууме.",
+    "why_recap": "Что делаем: итог дня. Зачем: увидеть всё выученное сегодня разом.",
+    "why_testday": "Что делаем: день теста. Зачем: пока не сдашь, неделя повторяется.",
+    "why_quizp": "Что делаем: разминка перед тестом.", "why_remind": "Что делаем: напоминаю про тест.",
+    "bonus": "✅ План на сегодня выполнен. 🎲 Бонус {k} из {m}: ещё один вопрос по этой неделе.",
+    "all_done": "Всё на сегодня ✅ Следующее сообщение придёт завтра с {a}:00. Я пишу сама, жать ничего не нужно.",
+    "btn_tidy_on": "Чистый чат: вкл", "btn_tidy_off": "Чистый чат: выкл",
+})
+PT["uk"].update({
+    "step_head": "➡️ Крок {k} з {n} {bar}", "stage_line": "Етап {s} з {S} «{name}»",
+    "why_intro": "Що робимо: знайомимось із дієсловами дня. Навіщо: щоб слова стали знайомими.",
+    "why_ex": "Що робимо: дивимось дієслово в живій фразі. Навіщо: так воно запам'ятовується легше, ніж у списку.",
+    "why_recall": "Що робимо: згадуємо слова дня. Навіщо: згадування закріплює сильніше, ніж перечитування.",
+    "why_quiz": "Що робимо: перевіряємо себе. Навіщо: кожна вірна відповідь іде в залік тижневого тесту.",
+    "why_mix": "Що робимо: змішуємо з минулими дієсловами. Навіщо: щоб старі не забувались.",
+    "why_form": "Що робимо: ставимо дієслово у форму «я». Навіщо: форма в реченні, а не слово саме по собі.",
+    "why_recap": "Що робимо: підсумок дня. Навіщо: побачити все вивчене сьогодні разом.",
+    "why_testday": "Що робимо: день тесту. Навіщо: поки не складеш, тиждень повторюється.",
+    "why_quizp": "Що робимо: розминка перед тестом.", "why_remind": "Що робимо: нагадую про тест.",
+    "bonus": "✅ План на сьогодні виконано. 🎲 Бонус {k} з {m}: ще одне питання за цим тижнем.",
+    "all_done": "Усе на сьогодні ✅ Наступне повідомлення прийде завтра з {a}:00. Я пишу сама, тиснути нічого не треба.",
+    "btn_tidy_on": "Чистий чат: увімк", "btn_tidy_off": "Чистий чат: вимк",
+})
+PT["en"].update({
+    "step_head": "➡️ Step {k} of {n} {bar}", "stage_line": "Stage {s} of {S} “{name}”",
+    "why_intro": "What: meeting today's verbs. Why: so the words feel familiar.",
+    "why_ex": "What: a verb in a real phrase. Why: it sticks better than in a list.",
+    "why_recall": "What: recalling today's words. Why: recalling beats rereading.",
+    "why_quiz": "What: checking yourself. Why: every right answer counts toward the weekly test.",
+    "why_mix": "What: mixing in earlier verbs. Why: so the old ones don't fade.",
+    "why_form": "What: putting a verb into the “I” form. Why: a form in a sentence, not a word in a vacuum.",
+    "why_recap": "What: today's recap. Why: see everything you learned today at once.",
+    "why_testday": "What: test day. Why: until you pass, the week repeats.",
+    "why_quizp": "What: a warm-up before the test.", "why_remind": "What: a reminder about the test.",
+    "bonus": "✅ Today's plan is done. 🎲 Bonus {k} of {m}: one more question from this week.",
+    "all_done": "That's all for today ✅ My next message comes tomorrow from {a}:00. I write by myself, no need to tap anything.",
+    "btn_tidy_on": "Tidy chat: on", "btn_tidy_off": "Tidy chat: off",
+})
 
 
 def T(lang, key):
@@ -2297,7 +2386,20 @@ def send_quizp(uid):
 
 
 def send_stage(uid):
-    bot.send_message(uid, stage_text(uid))
+    """Сообщение об этапе не исчезает и закрепляется сверху: всегда видно, где мы."""
+    u = U(uid)
+    old = u.get("pin_id")
+    sent = bot.send_message(uid, stage_text(uid), _keep=True)
+    mid = getattr(sent, "message_id", None)
+    try:
+        if old:
+            bot.delete_message(uid, old)
+        if mid:
+            bot.pin_chat_message(uid, mid, disable_notification=True)
+    except Exception as e:
+        print(f"Не удалось закрепить этап: {e}")
+    u["pin_id"] = mid
+    save_course()
 
 
 def send_recall(uid):
@@ -2418,8 +2520,30 @@ def next_keyboard(lang):
     return kb
 
 
+def step_prefix(uid, day, frame):
+    """Шапка шага: номер, этап и «что делаем и зачем»."""
+    lang = user_lang(uid)
+    names = [n for n, _m in day["frames"] if n != "stage"]
+    if frame not in names:
+        return ""
+    k, n = names.index(frame) + 1, len(names)
+    head = T(lang, "step_head").format(k=k, n=n, bar="▰" * k + "▱" * (n - k))
+    c = U(uid)["cycle"]
+    st = stage_index(c) if c else None
+    lines = [head]
+    if st is not None and not c.get("review"):
+        lines.append(T(lang, "stage_line").format(s=st + 1, S=len(STAGES), name=stage_name(st, lang)))
+    key = "why_" + frame.split(":")[0]
+    if key in PT["en"]:
+        lines.append(T(lang, key))
+    return "\n".join(lines)
+
+
+BONUS_MAX_DAY = 3
+
+
 def go_next(uid, chat_id):
-    """«Дальше»: следующий шаг программы прямо сейчас. Не ждёшь сообщений, жмёшь и идёшь дальше."""
+    """«Дальше»: следующий шаг программы прямо сейчас, с пояснением что и зачем."""
     lang = user_lang(uid)
     u = U(uid)
     if u["setup"] != "ready":
@@ -2434,30 +2558,122 @@ def go_next(uid, chat_id):
     if not day or day["date"] != now.date().isoformat():
         day = build_day(uid, now.date())
     if day["state"] == "test":
-        bot.send_message(chat_id, T(lang, "go_test"))
+        _prefix[chat_id] = T(lang, "go_test")
         reason = start_test(uid, chat_id)
         if reason:
+            _prefix.pop(chat_id, None)
             bot.send_message(chat_id, reason)
         return
     if day["state"] == "done":
         bot.send_message(chat_id, T(lang, "tomorrow"))
         return
-    pending = [n for n, _m in day["frames"] if n not in day["sent"]]
+    skip = day.setdefault("skip", [])
+    pending = [n for n, _m in day["frames"] if n not in day["sent"] or n in skip]
     if pending:
-        day["sent"].append(pending[0])
+        name = pending[0]
+        if name not in day["sent"]:
+            day["sent"].append(name)
+        if name in skip:
+            skip.remove(name)
         save_course()
-        day_message(uid, pending[0])
+        pre = step_prefix(uid, day, name)
+        if pre:
+            _prefix[chat_id] = pre
+        day_message(uid, name)
         return
     day["extra"] = day.get("extra", 0) + 1
     save_course()
-    if day["extra"] == 1:
-        bot.send_message(chat_id, T(lang, "next_done"))
     c = u["cycle"]
     pool = [v for v in (c["pack"] if c else []) if v not in c["credited"]] or list(c["pack"] if c else []) or list(u["learned"])
-    if pool:
-        send_quiz(uid, random.choice(pool))
-    else:
-        bot.send_message(chat_id, T(lang, "tomorrow"))
+    if day["extra"] > BONUS_MAX_DAY or not pool:
+        bot.send_message(chat_id, T(lang, "all_done").format(a=window(uid)[0]))
+        return
+    _prefix[chat_id] = T(lang, "bonus").format(k=day["extra"], m=BONUS_MAX_DAY)
+    send_quiz(uid, random.choice(pool))
+
+
+# ---------------------------------------------------------------- чистый чат
+TIDY_VOICE_TTL = 240          # голосовое живёт 4 минуты и удаляется
+_tidy = {}                    # chat_id -> [(message_id, время, вид)]
+_prefix = {}                  # chat_id -> шапка для следующего сообщения
+_tidy_lock = threading.Lock()
+
+
+def tidy_on(chat_id):
+    try:
+        return chat_id > 0 and bool(U(chat_id)["tidy"])
+    except Exception:
+        return False
+
+
+def tidy_track(chat_id, mid, kind="card"):
+    if mid is None:
+        return
+    if kind != "voice" and not tidy_on(chat_id):
+        return
+    with _tidy_lock:
+        _tidy.setdefault(chat_id, []).append((mid, time.time(), kind))
+
+
+def _tidy_delete(chat_id, mids):
+    for mid in mids:
+        try:
+            bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
+
+
+def tidy_sweep_voices():
+    now = time.time()
+    drops = []
+    with _tidy_lock:
+        for chat_id, items in _tidy.items():
+            old = [it for it in items if it[2] == "voice" and now - it[1] > TIDY_VOICE_TTL]
+            if old:
+                _tidy[chat_id] = [it for it in items if it not in old]
+                drops.append((chat_id, [it[0] for it in old]))
+    for chat_id, mids in drops:
+        _tidy_delete(chat_id, mids)
+
+
+_raw_send_message = bot.send_message
+_raw_send_voice = bot.send_voice
+
+
+def _send_message(chat_id, text=None, *a, **kw):
+    keep = kw.pop("_keep", False)
+    pre = None
+    if not keep and isinstance(text, str):
+        pre = _prefix.pop(chat_id, None)
+        if pre:
+            if kw.get("parse_mode") == "MarkdownV2":
+                text = escape_markdown_v2(pre) + "\n\n" + text
+            else:
+                text = pre + "\n\n" + text
+    try:
+        sent = _raw_send_message(chat_id, text, *a, **kw)
+    except Exception:
+        if pre:
+            _prefix[chat_id] = pre
+        raise
+    if tidy_on(chat_id):
+        with _tidy_lock:
+            old = [it[0] for it in _tidy.get(chat_id, [])]
+            _tidy[chat_id] = []
+        _tidy_delete(chat_id, old)
+        if not keep:
+            tidy_track(chat_id, getattr(sent, "message_id", None), "card")
+    return sent
+
+
+def _send_voice(chat_id, *a, **kw):
+    sent = _raw_send_voice(chat_id, *a, **kw)
+    tidy_track(chat_id, getattr(sent, "message_id", None), "voice")
+    return sent
+
+
+bot.send_message = _send_message
+bot.send_voice = _send_voice
 
 
 # ---------------------------------------------------------------- тест
@@ -2624,6 +2840,7 @@ def settings_view(uid):
     kb.row(*[InlineKeyboardButton(("• " if u["inten"] == k else "") + T(lang, "int_" + k),
                                   callback_data=f"st:int:{k}") for k in INTENSITY])
     kb.row(InlineKeyboardButton(T(lang, "btn_toggle_on" if u["next_btn"] else "btn_toggle_off"), callback_data="st:btn:x"))
+    kb.row(InlineKeyboardButton(T(lang, "btn_tidy_on" if u["tidy"] else "btn_tidy_off"), callback_data="st:tidy:x"))
     return text, kb
 
 
@@ -2672,7 +2889,9 @@ def finish_setup(uid, pace):
     now = budapest_now()
     day = build_day(uid, now.date())
     now_min = now.hour * 60 + now.minute
-    day["sent"] = [n for n, m in day["frames"] if m <= now_min and n not in ("intro", "stage")] + ["intro", "stage"]
+    late = [n for n, m in day["frames"] if m <= now_min and n not in ("intro", "stage")]
+    day["sent"] = late + ["intro", "stage"]
+    day["skip"] = late                                 # эти шаги не пропадут: их отдаст «Дальше»
     save_course()
     u["kb_sent"] = True
     bot.send_message(uid, T(lang, "ob_go"), reply_markup=next_keyboard(lang) if u["next_btn"] else None)
@@ -2859,6 +3078,8 @@ def on_settings(call):
             u["win"] = val
         elif kind == "int" and val in INTENSITY:
             u["inten"] = val
+        elif kind == "tidy":
+            u["tidy"] = not u["tidy"]
         elif kind == "btn":
             u["next_btn"] = not u["next_btn"]
             lang = user_lang(uid)
@@ -2974,6 +3195,8 @@ def tick_user(uid, now):
         return
     if u["setup"] != "ready":
         return
+    if u["test"]:
+        return                                    # идёт тест: карточки дня его не перебивают
     if u["next_btn"] and not u["kb_sent"] and now_min >= 9 * 60:
         u["kb_sent"] = True
         save_course()
@@ -2990,11 +3213,13 @@ def tick_user(uid, now):
         day["sent"].append(name)
         save_course()
         if now_min - minute > CATCHUP and name not in ("intro", "testday"):
-            continue                              # бот молчал слишком долго: не шлём запоздалое
+            day.setdefault("skip", []).append(name)   # опоздавшее не сыплем, но «Дальше» его отдаст
+            continue
         day_message(uid, name)
 
 
 def scheduler_tick(now):
+    tidy_sweep_voices()
     for uid in list(all_users):
         try:
             tick_user(uid, now)
