@@ -1962,9 +1962,9 @@ PT = {
         "settings": "⚙️ Настройки\n\nГлаголов в день: {n}\nВремя сообщений: {a}:00–{b}:00",
         "win_early": "Рано", "win_std": "Днём", "win_late": "Поздно",
         "today_none": "Сегодня глаголов ещё нет. Загляну в {h}:00.", "today_test": "Сегодня день теста. Жми /test",
-        "hint": "Всё приходит само, а «➡️ Дальше» ведёт по программе. Ещё: /shop, /settings, /test, /drill.",
+        "hint": "Всё приходит само, а «➡️ Дальше» ведёт по программе. Ещё: /settings, /test, /drill.",
         "drill_hint": "Выбери глагол для прописей:",
-        "old_btn": "Бот обновился: теперь глаголы приходят сами. Команды: /shop, /settings, /test, /drill.",
+        "old_btn": "Бот обновился: теперь глаголы приходят сами. Команды: /settings, /test, /drill.",
         "stage_head": "📍 Этап {s} из {S}: «{name}»", "stage_line": "📍 Этап {s} из {S} «{name}» · день {d} из {m}",
         "stage_line_test": "📍 Этап {s} из {S} «{name}» · тест", "repeat_line": "🔁 Повтор этапа {s} · день {d} из {m}",
         "stage_goal": "Цель: {goal}.", "stage_learn": "Выучить ({n}):", "stage_how": "Как идём: {m} дней глаголы приходят сами, потом тест (нужно {p}% верных). Сдал, и этап пройден.",
@@ -1976,7 +1976,7 @@ PT = {
         "intensity": "Сообщений в день", "int_calm": "Спокойно", "int_normal": "Обычно", "int_dense": "Плотно", "btn_toggle_on": "Кнопка «Дальше»: вкл", "btn_toggle_off": "Кнопка «Дальше»: выкл",
         "test_in": "до теста: {n} дн.", "stage_left": "Осталось выучить: {n}", "tomorrow": "Завтра: новые глаголы.", "test_soon": "Дальше: тест. Жми «➡️ Дальше».",
         "go_test": "Погнали, тест!", "setup_first": "Сначала познакомимся:",
-        "welcome_back": "{kao} Снова привет! Глаголы приходят сами. Прогресс закреплён сверху, а в /shop можно одеть Réka.",
+        "welcome_back": "{kao} Снова привет! Глаголы приходят сами. Твой прогресс всегда внизу.",
     },
     "uk": {
         "p_en": "я", "p_o": "він/вона", "intro": "Дієслова дня", "example": "Фрази", "recall": "Згадай",
@@ -2001,9 +2001,9 @@ PT = {
         "settings": "⚙️ Налаштування\n\nДієслів на день: {n}\nЧас повідомлень: {a}:00–{b}:00",
         "win_early": "Рано", "win_std": "Вдень", "win_late": "Пізно",
         "today_none": "Сьогодні дієслів ще немає. Загляну о {h}:00.", "today_test": "Сьогодні день тесту. Тисни /test",
-        "hint": "Усе приходить само, а «➡️ Далі» веде за програмою. Ще: /shop, /settings, /test, /drill.",
+        "hint": "Усе приходить само, а «➡️ Далі» веде за програмою. Ще: /settings, /test, /drill.",
         "drill_hint": "Обери дієслово для прописів:",
-        "old_btn": "Бот оновився: тепер дієслова приходять самі. Команди: /shop, /settings, /test, /drill.",
+        "old_btn": "Бот оновився: тепер дієслова приходять самі. Команди: /settings, /test, /drill.",
         "stage_head": "📍 Етап {s} з {S}: «{name}»", "stage_line": "📍 Етап {s} з {S} «{name}» · день {d} з {m}",
         "stage_line_test": "📍 Етап {s} з {S} «{name}» · тест", "repeat_line": "🔁 Повтор етапу {s} · день {d} з {m}",
         "stage_goal": "Мета: {goal}.", "stage_learn": "Вивчити ({n}):", "stage_how": "Як ідемо: {m} днів дієслова приходять самі, потім тест (потрібно {p}% вірних). Склав, і етап пройдено.",
@@ -2015,7 +2015,7 @@ PT = {
         "intensity": "Повідомлень на день", "int_calm": "Спокійно", "int_normal": "Звичайно", "int_dense": "Щільно", "btn_toggle_on": "Кнопка «Далі»: увімк", "btn_toggle_off": "Кнопка «Далі»: вимк",
         "test_in": "до тесту: {n} дн.", "stage_left": "Лишилось вивчити: {n}", "tomorrow": "Завтра: нові дієслова.", "test_soon": "Далі: тест. Тисни «➡️ Далі».",
         "go_test": "Поїхали, тест!", "setup_first": "Спочатку познайомимось:",
-        "welcome_back": "{kao} Знову привіт! Дієслова приходять самі. Прогрес закріплено зверху, а в /shop можна вдягнути Réka.",
+        "welcome_back": "{kao} Знову привіт! Дієслова приходять самі. Твій прогрес завжди внизу.",
     },
     "en": {
         "p_en": "I", "p_o": "he/she", "intro": "Verbs of the day", "example": "Phrases", "recall": "Recall",
@@ -2040,9 +2040,9 @@ PT = {
         "settings": "⚙️ Settings\n\nVerbs per day: {n}\nMessage window: {a}:00–{b}:00",
         "win_early": "Early", "win_std": "Daytime", "win_late": "Late",
         "today_none": "No verbs yet today. I'll be back at {h}:00.", "today_test": "Today is test day. Tap /test",
-        "hint": "Everything arrives by itself, and “➡️ Next” walks you through the program. Also: /shop, /settings, /test, /drill.",
+        "hint": "Everything arrives by itself, and “➡️ Next” walks you through the program. Also: /settings, /test, /drill.",
         "drill_hint": "Pick a verb to practice:",
-        "old_btn": "The bot was updated: verbs now arrive by themselves. Commands: /shop, /settings, /test, /drill.",
+        "old_btn": "The bot was updated: verbs now arrive by themselves. Commands: /settings, /test, /drill.",
         "stage_head": "📍 Stage {s} of {S}: “{name}”", "stage_line": "📍 Stage {s} of {S} “{name}” · day {d} of {m}",
         "stage_line_test": "📍 Stage {s} of {S} “{name}” · test", "repeat_line": "🔁 Stage {s} repeat · day {d} of {m}",
         "stage_goal": "Goal: {goal}.", "stage_learn": "To learn ({n}):", "stage_how": "How it goes: {m} days the verbs arrive on their own, then a test ({p}% correct needed). Pass it and the stage is done.",
@@ -2054,7 +2054,7 @@ PT = {
         "intensity": "Messages per day", "int_calm": "Calm", "int_normal": "Normal", "int_dense": "Dense", "btn_toggle_on": "“Next” button: on", "btn_toggle_off": "“Next” button: off",
         "test_in": "test in {n} d", "stage_left": "Left to learn: {n}", "tomorrow": "Tomorrow: new verbs.", "test_soon": "Next: the test. Tap “➡️ Next”.",
         "go_test": "Let's go, the test!", "setup_first": "Let's meet first:",
-        "welcome_back": "{kao} Hi again! Verbs arrive by themselves. Your progress is pinned at the top, and /shop lets you dress Réka up.",
+        "welcome_back": "{kao} Hi again! Verbs arrive by themselves. Your progress is always at the bottom.",
     },
 }
 
@@ -2710,6 +2710,7 @@ ITEMS = [
 ]
 ITEM_BY_ID = {it[0]: it for it in ITEMS}
 REWARD_PASS, REWARD_PERFECT, REWARD_REPEAT, REWARD_REVIEW = 30, 10, 15, 10
+SHOP_ENABLED = False                      # магазин и кастомизация выключены; токены копятся тихо, включить: True
 _render_cache = {}
 
 
@@ -2889,7 +2890,7 @@ PT["ru"].update({
     "hub_counts": "✅ Закреплено: {a}  ·  👋 Знал сам: {b}  ·  ⏳ Осталось: {c}",
     "hub_legend": "✅ выучил · 👋 знал · ▫️ впереди",
     "hub_test_today": "🧪 Тест сегодня: жми «➡️ Дальше»", "hub_test_in": "🧪 Тест через {n} дн.",
-    "hub_total": "Всего выучено: {n} из {t}", "hub_next": "Следующий этап: «{name}»", "hub_tokens": "🪙 Токены: {n}  ·  /shop",
+    "hub_total": "Всего выучено: {n} из {t}", "hub_next": "Следующий этап: «{name}»", "hub_tokens": "🪙 Токены: {n}  ·  /shop", "hub_hint": "👇 Жми «➡️ Дальше» или просто жди: я сама пришлю глаголы.",
     "reward": "🪙 +{n} токенов (всего {t}). Потрать на наряды для Réka: /shop",
     "shop_head": "🛍 Гардероб Réka\n🪙 Токены: {n}\nНадето: {worn}\n\nНажми на вещь: купить и надеть, потом надеть/снять. В каждом слоте одна вещь, слоты работают вместе.",
     "shop_none": "ничего", "shop_off": "Всё снято", "shop_bought": "Куплено и надето!", "shop_need": "Не хватает токенов: нужно ещё {n}",
@@ -2901,7 +2902,7 @@ PT["uk"].update({
     "hub_counts": "✅ Закріплено: {a}  ·  👋 Знав сам: {b}  ·  ⏳ Лишилось: {c}",
     "hub_legend": "✅ вивчив · 👋 знав · ▫️ попереду",
     "hub_test_today": "🧪 Тест сьогодні: тисни «➡️ Далі»", "hub_test_in": "🧪 Тест через {n} дн.",
-    "hub_total": "Усього вивчено: {n} з {t}", "hub_next": "Наступний етап: «{name}»", "hub_tokens": "🪙 Токени: {n}  ·  /shop",
+    "hub_total": "Усього вивчено: {n} з {t}", "hub_next": "Наступний етап: «{name}»", "hub_tokens": "🪙 Токени: {n}  ·  /shop", "hub_hint": "👇 Тисни «➡️ Далі» або просто чекай: я сама пришлю дієслова.",
     "reward": "🪙 +{n} токенів (усього {t}). Витрать на наряди для Réka: /shop",
     "shop_head": "🛍 Гардероб Réka\n🪙 Токени: {n}\nНадіто: {worn}\n\nНатисни на річ: купити й вдягнути, потім вдягнути/зняти. У кожному слоті одна річ, слоти працюють разом.",
     "shop_none": "нічого", "shop_off": "Усе знято", "shop_bought": "Куплено й вдягнено!", "shop_need": "Не вистачає токенів: треба ще {n}",
@@ -2913,7 +2914,7 @@ PT["en"].update({
     "hub_counts": "✅ Locked in: {a}  ·  👋 Already knew: {b}  ·  ⏳ Left: {c}",
     "hub_legend": "✅ learned · 👋 knew · ▫️ ahead",
     "hub_test_today": "🧪 Test today: tap “➡️ Next”", "hub_test_in": "🧪 Test in {n} d",
-    "hub_total": "Learned in total: {n} of {t}", "hub_next": "Next stage: “{name}”", "hub_tokens": "🪙 Tokens: {n}  ·  /shop",
+    "hub_total": "Learned in total: {n} of {t}", "hub_next": "Next stage: “{name}”", "hub_tokens": "🪙 Tokens: {n}  ·  /shop", "hub_hint": "👇 Tap “➡️ Next” or just wait: I send the verbs by myself.",
     "reward": "🪙 +{n} tokens ({t} total). Spend them on outfits for Réka: /shop",
     "shop_head": "🛍 Réka's wardrobe\n🪙 Tokens: {n}\nWearing: {worn}\n\nTap an item: buy and wear it, then wear/take off. One item per slot, and slots work together.",
     "shop_none": "nothing", "shop_off": "Everything taken off", "shop_bought": "Bought and worn!", "shop_need": "Not enough tokens: {n} more needed",
@@ -2937,7 +2938,8 @@ def hub_caption(uid):
         done = [v for v in plan if v not in claimed and (v in learned or v in credited)]
         left = len(plan) - len(knew) - len(done)
         k = len(knew) + len(done)
-        lines.append("▰" * k + "▱" * (len(plan) - k) + f" {k}/{len(plan)}")
+        fill = round(12 * k / max(1, len(plan)))
+        lines.append("▰" * fill + "▱" * (12 - fill) + f" {k}/{len(plan)}")
         lines.append(T(lang, "hub_counts").format(a=len(done), b=len(knew), c=left))
         lines.append("")
         lines.append("<blockquote expandable>")
@@ -2956,7 +2958,9 @@ def hub_caption(uid):
         lines.append(T(lang, "hub_review"))
         lines.append(T(lang, "hub_total").format(n=len(learned), t=N_VERBS))
     lines.append(T(lang, "hub_total").format(n=len(learned), t=N_VERBS) if s is not None else "")
-    lines.append(T(lang, "hub_tokens").format(n=u["tokens"]))
+    if SHOP_ENABLED:
+        lines.append(T(lang, "hub_tokens").format(n=u["tokens"]))
+    lines.append(T(lang, "hub_hint"))
     text = "\n".join(l for i, l in enumerate(lines) if l != "" or (i and lines[i - 1] != ""))
     if len(re.sub(r"<[^>]+>", "", text)) > 1000:       # подпись к фото не длиннее 1024 знаков: тогда без списка
         text = re.sub(r"<blockquote expandable>.*?</blockquote>\n?", "", text, flags=re.S)
@@ -3168,6 +3172,8 @@ def shop_caption(uid):
 
 @bot.message_handler(commands=["shop", "wardrobe"])
 def cmd_shop(message):
+    if not SHOP_ENABLED:
+        return
     uid = message.from_user.id
     all_users.add(uid)
     if U(uid)["setup"] != "ready":
@@ -3188,6 +3194,12 @@ def cmd_shop(message):
 
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("sh:"))
 def on_shop(call):
+    if not SHOP_ENABLED:
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
+        return
     uid = call.from_user.id
     lang = user_lang(uid)
     u = U(uid)
@@ -3322,7 +3334,8 @@ def finish_test(uid, chat_id):
             reward = REWARD_PASS + (REWARD_PERFECT if n and r == n else 0)
     if reward:
         u["tokens"] += reward
-        lines.append(T(lang, "reward").format(n=reward, t=u["tokens"]))
+        if SHOP_ENABLED:
+            lines.append(T(lang, "reward").format(n=reward, t=u["tokens"]))
     if bonus_q:
         lines.append(T(lang, "bonus_ok").format(n=len(bonus_right)))
         if bonus_bad:
@@ -3927,7 +3940,6 @@ try:   # меню команд (кнопка «/» рядом с полем вв
     from telebot.types import BotCommand
     bot.set_my_commands([
         BotCommand("today", "Глаголы дня"),
-        BotCommand("shop", "Гардероб Réka и токены"),
         BotCommand("test", "Тест недели"),
         BotCommand("settings", "Темп и время"),
         BotCommand("drill", "Прописи: глагол по формам"),
