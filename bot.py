@@ -2719,12 +2719,23 @@ def _star(cx, cy, r1, r2, n=5):
     return pts
 
 
+def _fit_square(img):
+    """Любая пропорция вписывается в квадрат без растягивания, лишнее место прозрачное."""
+    if img.size == (CANVAS, CANVAS):
+        return img
+    k = CANVAS / max(img.size)
+    w, h = max(1, round(img.size[0] * k)), max(1, round(img.size[1] * k))
+    out = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
+    out.paste(img.resize((w, h), Image.LANCZOS), ((CANVAS - w) // 2, (CANVAS - h) // 2))
+    return out
+
+
 def _layer_file(name):
     root = os.path.dirname(ASSET_DIR)                    # можно просто положить PNG рядом с bot.py, без папок
     for p in (os.path.join(UPLOAD_DIR, name + ".png"), os.path.join(ASSET_DIR, name + ".png"), os.path.join(ASSET_DIR, "items", name + ".png"), os.path.join(root, name + ".png")):
         if os.path.isfile(p):
             try:
-                return Image.open(p).convert("RGBA").resize((CANVAS, CANVAS), Image.LANCZOS)
+                return _fit_square(Image.open(p).convert("RGBA"))
             except Exception:
                 return None
     return None
@@ -3070,7 +3081,9 @@ def on_asset_upload(message):
         if is_photo and not name.startswith("bg"):
             bot.send_message(message.chat.id, "Это сжатое фото: фон не станет прозрачным. Пришли тот же PNG как ФАЙЛ (скрепка → Файл).")
             return
-        img = img.resize((CANVAS, CANVAS), Image.LANCZOS) if img.size != (CANVAS, CANVAS) else img
+        if max(img.size) > 2048:
+            k = 2048 / max(img.size)
+            img = img.resize((round(img.size[0] * k), round(img.size[1] * k)), Image.LANCZOS)
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         img.save(os.path.join(UPLOAD_DIR, name + ".png"), "PNG")
     except Exception as e:
