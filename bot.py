@@ -2649,7 +2649,8 @@ def _send_message(chat_id, text=None, *a, **kw):
             tidy_track(chat_id, getattr(sent, "message_id", None), "card")
     if isinstance(chat_id, int) and chat_id > 0 and not keep:
         try:
-            refresh_hub(chat_id)
+            if U(chat_id)["setup"] == "ready":
+                hub_schedule(chat_id)
         except Exception as e:
             print(f"Карточка: {e}")
     return sent
@@ -2658,6 +2659,11 @@ def _send_message(chat_id, text=None, *a, **kw):
 def _send_voice(chat_id, *a, **kw):
     sent = _raw_send_voice(chat_id, *a, **kw)
     tidy_track(chat_id, getattr(sent, "message_id", None), "voice")
+    try:
+        if isinstance(chat_id, int) and chat_id > 0 and U(chat_id)["setup"] == "ready":
+            hub_schedule(chat_id)
+    except Exception:
+        pass
     return sent
 
 
@@ -2672,6 +2678,7 @@ except Exception:                         # без Pillow бот работае�
     Image = ImageDraw = None
 
 import io
+import html as _html
 import math as _math
 
 ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
@@ -2933,11 +2940,12 @@ def hub_caption(uid):
         lines.append("▰" * k + "▱" * (len(plan) - k) + f" {k}/{len(plan)}")
         lines.append(T(lang, "hub_counts").format(a=len(done), b=len(knew), c=left))
         lines.append("")
+        lines.append("<blockquote expandable>")
         for v in plan:
             mark = "👋" if v in claimed else ("✅" if (v in learned or v in credited) else "▫️")
-            lines.append(f"{mark} {VERB_COURSE[v][0]} — {v_tr(lang, v)}")
+            lines.append(f"{mark} {_html.escape(VERB_COURSE[v][0])} — {_html.escape(v_tr(lang, v))}")
         lines.append(T(lang, "hub_legend"))
-        lines.append("")
+        lines.append("</blockquote>")
         if c["state"] == "test":
             lines.append(T(lang, "hub_test_today"))
         else:
@@ -2950,8 +2958,8 @@ def hub_caption(uid):
     lines.append(T(lang, "hub_total").format(n=len(learned), t=N_VERBS) if s is not None else "")
     lines.append(T(lang, "hub_tokens").format(n=u["tokens"]))
     text = "\n".join(l for i, l in enumerate(lines) if l != "" or (i and lines[i - 1] != ""))
-    if len(text) > 1000:                      # подпись к фото не длиннее 1024 знаков: список глаголов отдаём первым
-        text = "\n".join(l for l in text.split("\n") if not l.startswith(("✅ ", "👋 ", "▫️ ")) or "·" in l)[:1000]
+    if len(re.sub(r"<[^>]+>", "", text)) > 1000:       # подпись к фото не длиннее 1024 знаков: тогда без списка
+        text = re.sub(r"<blockquote expandable>.*?</blockquote>\n?", "", text, flags=re.S)
     return text.strip()
 
 
@@ -2959,8 +2967,13 @@ _hub_lock = threading.RLock()
 _hub_busy = threading.local()
 
 
-def refresh_hub(uid, force=False):
-    """Закреплённая карточка: картинка Réka и прогресс этапа. Меняется на месте, а при потере создаётся заново."""
+HUB_DELAY = 1.5                           # секунд тишины после последнего сообщения, потом карточка уезжает в самый низ
+_hub_last = {}                            # chat_id -> карточка сейчас последнее сообщение в чате
+_hub_timers = {}
+
+
+def refresh_hub(uid, force=False, bottom=False):
+    """Карточка с картинкой Réka и прогрессом. Обычно правится на месте; bottom=True пересоздаёт её последним сообщением чата."""
     u = U(uid)
     if u["setup"] != "ready" or not u["cycle"] or getattr(_hub_busy, "on", False):
         return
@@ -2971,17 +2984,19 @@ def refresh_hub(uid, force=False):
             wk = worn_key(u["worn"])
             sig = cap + "#" + wk
             mid, kind = u.get("pin_id"), u.get("hub_kind")
-            if mid and kind in ("photo", "text") and sig == u.get("hub_sig") and not force:
+            if bottom and mid and kind in ("photo", "text") and _hub_last.get(uid) and sig == u.get("hub_sig") and not force:
                 return
-            img = render_reka(u["worn"])
-            if mid and kind in ("photo", "text"):
+            if mid and kind in ("photo", "text") and not (bottom and not _hub_last.get(uid)):
+                if sig == u.get("hub_sig") and not force:
+                    return
+                img = render_reka(u["worn"])
                 try:
                     if kind == "photo" and img is not None and wk != u.get("hub_img"):
-                        bot.edit_message_media(InputMediaPhoto(img, caption=cap), uid, mid)
+                        bot.edit_message_media(InputMediaPhoto(img, caption=cap, parse_mode="HTML"), uid, mid)
                     elif kind == "photo":
-                        bot.edit_message_caption(caption=cap, chat_id=uid, message_id=mid)
+                        bot.edit_message_caption(caption=cap, chat_id=uid, message_id=mid, parse_mode="HTML")
                     else:
-                        bot.edit_message_text(cap, uid, mid)
+                        bot.edit_message_text(cap, uid, mid, parse_mode="HTML")
                     u["hub_sig"], u["hub_img"] = sig, wk
                     save_course()
                     return
@@ -2990,35 +3005,54 @@ def refresh_hub(uid, force=False):
                         u["hub_sig"], u["hub_img"] = sig, wk
                         return
                     print(f"Карточка не обновилась, создаю заново: {e}")
+            img = render_reka(u["worn"])
             old = mid
             if img is not None:
-                sent = bot.send_photo(uid, img, caption=cap)
+                sent = bot.send_photo(uid, img, caption=cap, parse_mode="HTML", disable_notification=True)
                 u["hub_kind"] = "photo"
             else:
-                sent = _raw_send_message(uid, cap)
+                sent = _raw_send_message(uid, cap, parse_mode="HTML", disable_notification=True)
                 u["hub_kind"] = "text"
             new = getattr(sent, "message_id", None)
             u["pin_id"], u["hub_sig"], u["hub_img"] = new, sig, wk
+            _hub_last[uid] = True
             save_course()
             try:
                 if old:
                     bot.delete_message(uid, old)
             except Exception:
                 pass
-            try:
-                if new:
-                    bot.pin_chat_message(uid, new, disable_notification=True)
-            except Exception as e:
-                print(f"Не удалось закрепить карточку: {e}")
         except Exception as e:
             print(f"Ошибка карточки прогресса: {e}")
         finally:
             _hub_busy.on = False
 
 
+def _hub_fire(chat_id):
+    _hub_timers.pop(chat_id, None)
+    try:
+        refresh_hub(chat_id, bottom=True)
+    except Exception as e:
+        print(f"Карточка: {e}")
+
+
+def hub_schedule(chat_id):
+    """Что-то пришло после карточки: она больше не внизу. Когда всё стихнет, карточка приедет вниз сама."""
+    _hub_last[chat_id] = False
+    if HUB_DELAY <= 0:
+        _hub_fire(chat_id)
+        return
+    t = _hub_timers.pop(chat_id, None)
+    if t:
+        t.cancel()
+    t = threading.Timer(HUB_DELAY, _hub_fire, args=(chat_id,))
+    t.daemon = True
+    _hub_timers[chat_id] = t
+    t.start()
+
+
 def send_stage(uid):
-    """Первый день этапа: обновляем закреплённую карточку и коротко говорим, что началось."""
-    refresh_hub(uid, force=True)
+    """Первый день этапа: объясняем, что началось. Карточка с прогрессом сама приедет вниз."""
     bot.send_message(uid, stage_text(uid))
 
 
@@ -3670,7 +3704,7 @@ def cmd_progress(message):
     if U(uid)["setup"] != "ready":
         start_onboarding(uid, message.chat.id)
         return
-    refresh_hub(uid, force=True)
+    refresh_hub(uid, force=True, bottom=True)
 
 
 @bot.message_handler(commands=["settings", "modes"])
