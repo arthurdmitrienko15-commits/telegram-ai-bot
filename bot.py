@@ -1168,6 +1168,12 @@ def send_reka_ai(chat_id, user_id, user_text, lang, reply_markup=None):
             text += f"\n\n||{escape_markdown_v2(tr)}||"
         plain = hu + (f"\n\n({tr})" if tr else "")
     else:
+        try:
+            if U(user_id)["setup"] == "ready":      # ИИ нет: любое слово от тебя значит «Дальше», а не болтовню-приветствие
+                go_next(user_id, chat_id)
+                return
+        except Exception as e:
+            print(f"Дальше вместо болтовни не вышло: {e}")
         text = reka_chat(lang)  # запасной вариант без ИИ: венгерская фраза + перевод
         plain = re.sub(r"[\\|]", "", text)
     try:
@@ -2492,6 +2498,8 @@ def next_label(lang):
 
 
 NEXT_BTNS = {v.replace("\ufe0f", "") for v in NEXT_NAMES.values()}
+NEXT_WORDS = {"дальше", "далі", "next", "далее", "ок", "окей", "ok", "okay", "да", "ага", "угу", "понял", "поняла", "ясно", "давай",
+              "го", "продолжай", "continue", "добре", "так", "yes", "yep", "sure", "ладно", "хорошо", "+", "👍"}
 
 
 def next_keyboard(lang):
@@ -3197,6 +3205,15 @@ def start_onboarding(uid, chat_id=None):
     bot.send_message(chat_id or uid, T(lang, "ob_hi").format(kao=random.choice(KAO_HAPPY)), reply_markup=ob_markup(uid))
 
 
+def resume_onboarding(uid, chat_id):
+    """Знакомство прервалось (например, бот перезапускался): показываем текущий экран, отметки сохраняются."""
+    u = U(uid)
+    if u["setup"] != "onb":
+        start_onboarding(uid, chat_id)
+        return
+    bot.send_message(chat_id, T(user_lang(uid), "ob_hi").format(kao=random.choice(KAO_HAPPY)), reply_markup=ob_markup(uid))
+
+
 def pace_markup(lang, prefix):
     kb = InlineKeyboardMarkup()
     kb.row(*[InlineKeyboardButton(T(lang, "pace_rec" if n == PACE_DEFAULT else "pace_btn").format(n=n),
@@ -3597,8 +3614,14 @@ def handle_all_messages(message):
         exit_to_menu(message.chat.id, user_id)
         return
 
-    # --- кнопка «Дальше»
-    if text.replace("\ufe0f", "") in NEXT_BTNS and "verb" not in data:
+    # --- знакомство не закончено: любое слово возвращает к нему, а не к болтовне (она стёрла бы вопрос)
+    if U(user_id)["setup"] != "ready" and "verb" not in data and text not in (CARDS_BTN,):
+        resume_onboarding(user_id, message.chat.id)
+        return
+
+    # --- кнопка «Дальше», слово «дальше» и короткое «ок»/«да»: всё это значит «продолжаем»
+    word = re.sub(r"[^\w+]", "", text.lower())
+    if (text.replace("\ufe0f", "") in NEXT_BTNS or word in NEXT_WORDS) and "verb" not in data:
         go_next(user_id, message.chat.id)
         return
 
@@ -3690,6 +3713,7 @@ try:   # меню команд (кнопка «/» рядом с полем вв
 except Exception as e:
     print(f"Не удалось задать меню команд: {e}")
 
+print(f"Данные лежат в: {DATA_DIR} (пользователей в файле: {len(_store)}). Если после каждого обновления бота это число 0, нужен постоянный диск (Volume).")
 threading.Thread(target=daily_reminders_loop, daemon=True).start()
 
 print("Река запущена...")
