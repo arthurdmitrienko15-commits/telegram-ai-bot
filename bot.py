@@ -1901,7 +1901,7 @@ _lock = threading.RLock()
 _USER_DEFAULTS = {
     "pace": PACE_DEFAULT, "win": "std", "setup": None, "claimed": [], "learned": [],
     "cycle": None, "day": None, "test": None, "ach": [], "marked": [], "page": 0, "wkn": 0,
-    "inten": "normal", "next_btn": True, "kb_sent": False, "tidy": True, "pin_id": None, "trail": [],
+    "inten": "normal", "next_btn": True, "kb_sent": False, "tidy": True, "pin_id": None, "trail": [], "kb_gone": False,
 }
 
 
@@ -2495,12 +2495,27 @@ NEXT_BTNS = {v.replace("\ufe0f", "") for v in NEXT_NAMES.values()}
 
 
 def next_keyboard(lang):
+    """Нижней клавиатуры больше нет: кнопка «Дальше» живёт под каждым сообщением. Старую клавиатуру этим убираем."""
+    return ReplyKeyboardRemove()
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "nx:go")
+def on_next_button(call):
+    uid = call.from_user.id
+    all_users.add(uid)
     try:
-        kb = ReplyKeyboardMarkup(resize_keyboard=True, is_persistent=True)
-    except TypeError:                                   # старая версия библиотеки без is_persistent
-        kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.row(KeyboardButton(text=next_label(lang)))
-    return kb
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+    go_next(uid, call.message.chat.id)
+
+
+PT["ru"].update({"do_spoiler": "👉 Вспомни перевод, потом нажми на скрытый текст и проверь себя.",
+                 "do_pick": "👉 Выбери ответ кнопкой."})
+PT["uk"].update({"do_spoiler": "👉 Згадай переклад, потім натисни на прихований текст і перевір себе.",
+                 "do_pick": "👉 Обери відповідь кнопкою."})
+PT["en"].update({"do_spoiler": "👉 Recall the translation, then tap the hidden text to check yourself.",
+                 "do_pick": "👉 Pick an answer with a button."})
 
 
 def step_prefix(uid, day, frame):
@@ -2511,14 +2526,14 @@ def step_prefix(uid, day, frame):
         return ""
     k, n = names.index(frame) + 1, len(names)
     head = T(lang, "step_head").format(k=k, n=n, bar="▰" * k + "▱" * (n - k))
-    c = U(uid)["cycle"]
-    st = stage_index(c) if c else None
-    lines = [head]
-    if st is not None and not c.get("review"):
-        lines.append(T(lang, "stage_line").format(s=st + 1, S=len(STAGES), name=stage_name(st, lang)))
-    key = "why_" + frame.split(":")[0]
+    lines = [head]                                    # этап и прогресс уже есть в шапке над сообщением
+    kind = frame.split(":")[0]
+    key = "why_" + kind
     if key in PT["en"]:
         lines.append(T(lang, key))
+    do = "do_pick" if kind in ("quiz", "form", "quizp") else ("do_spoiler" if kind in ("recall", "mix") else None)
+    if do:                                            # у остальных шагов подсказка «прочитай и жми Дальше» добавляется внизу
+        lines.append(T(lang, do))
     return "\n".join(lines)
 
 
@@ -2639,6 +2654,52 @@ _raw_send_voice = bot.send_voice
 _raw_edit_text = bot.edit_message_text
 
 
+def _ready(chat_id):
+    try:
+        u = U(chat_id)
+        return chat_id > 0 and u["setup"] == "ready" and bool(u["cycle"])
+    except Exception:
+        return False
+
+
+def _passive(markup):
+    """Нет кнопок-ответов: сообщение нужно просто прочитать."""
+    if markup is None or isinstance(markup, ReplyKeyboardRemove):
+        return True
+    rows = getattr(markup, "keyboard", None)
+    if not rows or isinstance(markup, ReplyKeyboardMarkup):
+        return not rows
+    return all(str(getattr(b, "callback_data", "")).startswith(("au:", "nx:")) for r in rows for b in r)
+
+
+def _with_next(chat_id, markup):
+    """Добавляет внизу кнопку «➡️ Дальше»: она всегда под рукой и не зависит от нижней клавиатуры Telegram."""
+    if not _ready(chat_id) or not U(chat_id)["next_btn"]:
+        return markup
+    if isinstance(markup, ReplyKeyboardMarkup):
+        return markup
+    if markup is None or isinstance(markup, ReplyKeyboardRemove):
+        markup = InlineKeyboardMarkup()
+    elif not isinstance(markup, InlineKeyboardMarkup):
+        return markup
+    if not any(getattr(b, "callback_data", None) == "nx:go" for r in markup.keyboard for b in r):
+        markup.row(InlineKeyboardButton(next_label(user_lang(chat_id)), callback_data="nx:go"))
+    return markup
+
+
+def _clear_old_keyboard(chat_id):
+    """Один раз убираем нижнюю клавиатуру прошлых версий: временное сообщение сразу удаляется."""
+    u = U(chat_id)
+    if u.get("kb_gone"):
+        return
+    u["kb_gone"] = True
+    try:
+        tmp = _raw_send_message(chat_id, "·", reply_markup=ReplyKeyboardRemove())
+        bot.delete_message(chat_id, tmp.message_id)
+    except Exception:
+        pass
+
+
 def _send_message(chat_id, text=None, *a, **kw):
     kw.pop("_keep", None)
     pre = None
@@ -2651,6 +2712,12 @@ def _send_message(chat_id, text=None, *a, **kw):
                 text = pre + "\n\n" + text
     tidy = tidy_on(chat_id)
     kind = "card"
+    if tidy and isinstance(text, str) and not a and _ready(chat_id):
+        _clear_old_keyboard(chat_id)
+        if pre and _passive(kw.get("reply_markup")):
+            foot = T(user_lang(chat_id), "foot_next")
+            text = text + "\n\n" + (escape_markdown_v2(foot) if kw.get("parse_mode") == "MarkdownV2" else foot)
+        kw["reply_markup"] = _with_next(chat_id, kw.get("reply_markup"))
     try:
         sent = None
         if tidy and isinstance(text, str) and not a:
@@ -2685,6 +2752,8 @@ def _is_screen(chat_id, mid):
 
 def _edit_message_text(text, chat_id=None, message_id=None, *a, **kw):
     """Сообщение с картинкой правится через подпись, обычное через текст: остальной код об этом не знает."""
+    if chat_id is not None and tidy_on(chat_id) and _ready(chat_id):
+        kw["reply_markup"] = _with_next(chat_id, kw.get("reply_markup"))
     if chat_id is not None and message_id is not None and _is_screen(chat_id, message_id):
         return _edit_screen(text, chat_id, message_id, kw)
     try:
@@ -2852,6 +2921,9 @@ def progress_full(uid):
     return "\n".join(lines)
 
 
+PT["ru"].update({"foot_next": "👉 Прочитай и жми «➡️ Дальше», или просто жди: следующее придёт само."})
+PT["uk"].update({"foot_next": "👉 Прочитай і тисни «➡️ Далі», або просто чекай: наступне прийде саме."})
+PT["en"].update({"foot_next": "👉 Read it and tap “➡️ Next”, or just wait: the next one comes by itself."})
 PT["ru"].update({
     "hub_stage": "📍 Этап {s} из {S} «{name}»", "hub_review": "🔁 Повторение выученного",
     "hub_legend": "✅ выучил · 👋 знал · ▫️ впереди", "hub_test_today": "🧪 Тест сегодня: жми «➡️ Дальше»",
@@ -3150,7 +3222,7 @@ def finish_setup(uid, pace):
     day["skip"] = late                                 # эти шаги не пропадут: их отдаст «Дальше»
     save_course()
     u["kb_sent"] = True
-    bot.send_message(uid, T(lang, "ob_go"), reply_markup=next_keyboard(lang) if u["next_btn"] else None)
+    bot.send_message(uid, T(lang, "ob_go"))
     if day["frames"] and day["frames"][0][0] == "stage":
         send_stage(uid)
     send_intro(uid)
@@ -3338,11 +3410,6 @@ def on_settings(call):
             u["tidy"] = not u["tidy"]
         elif kind == "btn":
             u["next_btn"] = not u["next_btn"]
-            lang = user_lang(uid)
-            if u["next_btn"]:
-                bot.send_message(call.message.chat.id, T(lang, "next_on"), reply_markup=next_keyboard(lang))
-            else:
-                bot.send_message(call.message.chat.id, T(lang, "next_off"), reply_markup=ReplyKeyboardRemove())
         save_course()
         text, kb = settings_view(uid)
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb)
@@ -3456,10 +3523,6 @@ def tick_user(uid, now):
         return
     if u["test"]:
         return                                    # идёт тест: карточки дня его не перебивают
-    if u["next_btn"] and not u["kb_sent"] and now_min >= 9 * 60:
-        u["kb_sent"] = True
-        save_course()
-        bot.send_message(uid, T(lang, "next_hint"), reply_markup=next_keyboard(lang))
     a, _b = window(uid)
     day = u["day"]
     if (not day or day["date"] != today.isoformat()) and now_min >= a * 60:
@@ -3474,6 +3537,9 @@ def tick_user(uid, now):
         if now_min - minute > CATCHUP and name not in ("intro", "testday"):
             day.setdefault("skip", []).append(name)   # опоздавшее не сыплем, но «Дальше» его отдаст
             continue
+        pre = step_prefix(uid, day, name)
+        if pre:
+            _prefix[uid] = pre
         day_message(uid, name)
 
 
