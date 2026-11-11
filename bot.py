@@ -1907,7 +1907,7 @@ _lock = threading.RLock()
 _USER_DEFAULTS = {
     "pace": PACE_DEFAULT, "win": "std", "setup": None, "claimed": [], "learned": [],
     "cycle": None, "day": None, "test": None, "ach": [], "marked": [], "page": 0, "wkn": 0,
-    "inten": "normal", "next_btn": True, "kb_sent": False, "tidy": True, "pin_id": None, "trail": [], "kb_gone": False,
+    "inten": "normal", "early": None, "next_btn": True, "kb_sent": False, "tidy": True, "pin_id": None, "trail": [], "kb_gone": False,
 }
 
 
@@ -2546,6 +2546,7 @@ def step_prefix(uid, day, frame):
 
 
 BONUS_MAX_DAY = 3
+EARLY_DAYS_MAX = 2                                      # столько учебных дней можно открыть досрочно за календарный день
 
 
 def go_next(uid, chat_id):
@@ -2584,7 +2585,7 @@ def go_next(uid, chat_id):
         save_course()
         pre = step_prefix(uid, day, name)
         if pre:
-            _prefix[chat_id] = pre
+            _prefix[chat_id] = (_prefix[chat_id] + "\n\n" if _prefix.get(chat_id) else "") + pre
         day_message(uid, name)
         return
     day["extra"] = day.get("extra", 0) + 1
@@ -2592,7 +2593,20 @@ def go_next(uid, chat_id):
     c = u["cycle"]
     pool = [v for v in (c["pack"] if c else []) if v not in c["credited"]] or list(c["pack"] if c else []) or list(u["learned"])
     if day["extra"] > BONUS_MAX_DAY or not pool:
-        bot.send_message(chat_id, T(lang, "all_done").format(a=window(uid)[0]))
+        early = u.get("early") or {}
+        if early.get("date") != now.date().isoformat():
+            early = {"date": now.date().isoformat(), "n": 0}
+        if early["n"] >= EARLY_DAYS_MAX:
+            bot.send_message(chat_id, T(lang, "all_done").format(a=window(uid)[0]))
+            return
+        early["n"] += 1
+        u["early"] = early
+        _prefix[chat_id] = T(lang, "early").format(k=early["n"], m=EARLY_DAYS_MAX)
+        newday = build_day(uid, now.date())             # хочешь дальше: открываем следующий учебный день раньше срока
+        names = [n for n, _m in newday["frames"]]
+        newday["sent"], newday["skip"] = list(names), list(names)
+        save_course()
+        go_next(uid, chat_id)
         return
     _prefix[chat_id] = T(lang, "bonus").format(k=day["extra"], m=BONUS_MAX_DAY)
     send_quiz(uid, random.choice(pool))
@@ -2929,6 +2943,9 @@ def progress_full(uid):
     return "\n".join(lines)
 
 
+PT["ru"].update({"early": "🚀 На сегодня план выполнен, открываю следующий день раньше ({k} из {m})."})
+PT["uk"].update({"early": "🚀 На сьогодні план виконано, відкриваю наступний день раніше ({k} з {m})."})
+PT["en"].update({"early": "🚀 Today's plan is done, opening the next day early ({k} of {m})."})
 PT["ru"].update({"foot_next": "👉 Прочитай и жми «➡️ Дальше», или просто жди: следующее придёт само."})
 PT["uk"].update({"foot_next": "👉 Прочитай і тисни «➡️ Далі», або просто чекай: наступне прийде саме."})
 PT["en"].update({"foot_next": "👉 Read it and tap “➡️ Next”, or just wait: the next one comes by itself."})
