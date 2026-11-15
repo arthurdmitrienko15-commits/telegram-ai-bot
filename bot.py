@@ -2259,6 +2259,8 @@ def build_day(uid, today, _depth=0):
         return build_day(uid, today, _depth + 1)
     if c["state"] == "deliver":
         names = day_frames(uid, ids)
+        if MEMES and not c["review"]:
+            names.insert(names.index("recap") if "recap" in names else len(names), "meme")   # фраза недели из мема
         if c["days"] == 1:
             names = ["stage"] + names            # в первый день этапа объясняем, где мы и что надо выучить
     else:
@@ -2469,6 +2471,8 @@ def day_message(uid, frame):
         send_recall(uid)
     elif frame.startswith("quiz:"):
         send_quiz(uid, int(frame.split(":")[1]))
+    elif frame == "meme":
+        send_meme(uid)
     elif frame == "testday":
         send_test_invite(uid)
     elif frame == "recap":
@@ -2540,6 +2544,9 @@ def step_prefix(uid, day, frame):
     if key in PT["en"]:
         lines.append(T(lang, key))
     do = "do_pick" if kind in ("quiz", "form", "quizp") else ("do_spoiler" if kind in ("recall", "mix") else None)
+    if kind == "meme":
+        md = meme_mode(uid)
+        do = "do_pick" if md == "quiz" else ("do_spoiler" if md in ("recall", "reverse") else None)
     if do:                                            # у остальных шагов подсказка «прочитай и жми Дальше» добавляется внизу
         lines.append(T(lang, do))
     return "\n".join(lines)
@@ -2882,14 +2889,16 @@ def _send_screen(chat_id, text, kw):
     u = U(chat_id)
     if u["setup"] != "ready" or not u["cycle"]:
         return None
-    data = reka_data()
+    ov = _photo_override.pop(chat_id, None)            # картинка мема вместо картинки Réka
+    data = ov[1] if ov else reka_data()
     if not data:
         return None
     cap = _join_caption(screen_header(chat_id), text, kw.get("parse_mode"))
     if len(cap) > 1024:
         return None
     kw.pop("disable_web_page_preview", None)
-    for src in ([_reka_fid] if _reka_fid else []) + [None]:
+    fid = (_meme_fid.get(ov[0]) if ov else _reka_fid)
+    for src in ([fid] if fid else []) + [None]:
         try:
             photo = src
             if photo is None:
@@ -2897,7 +2906,10 @@ def _send_screen(chat_id, text, kw):
                 photo.name = "reka.jpg"
             sent = bot.send_photo(chat_id, photo, caption=cap, **kw)
             try:
-                _reka_fid = sent.photo[-1].file_id
+                if ov:
+                    _meme_fid[ov[0]] = sent.photo[-1].file_id
+                else:
+                    _reka_fid = sent.photo[-1].file_id
             except Exception:
                 pass
             return sent
@@ -2905,7 +2917,10 @@ def _send_screen(chat_id, text, kw):
             if src is None:
                 print(f"Картинка не отправилась, шлю текстом: {e}")
                 return None
-            _reka_fid = None                  # file_id устарел: загрузим картинку заново
+            if ov:
+                _meme_fid.pop(ov[0], None)
+            else:
+                _reka_fid = None              # file_id устарел: загрузим картинку заново
     return None
 
 
@@ -2915,6 +2930,129 @@ def _edit_screen(text, chat_id, message_id, kw):
         cap = text[:1024]
     return bot.edit_message_caption(caption=cap, chat_id=chat_id, message_id=message_id,
                                     parse_mode=kw.get("parse_mode"), reply_markup=kw.get("reply_markup"))
+
+
+# ---------------------------------------------------------------- фраза недели из венгерских мемов
+try:                                      # meme_imgs.py: фразы и картинки прямо в коде
+    import meme_imgs as _memes
+    MEMES = list(_memes.MEMES)
+except Exception:
+    _memes, MEMES = None, []
+_photo_override = {}                      # chat_id -> (ключ, байты): картинка для следующего экрана
+_meme_fid = {}
+_meme_bytes = {}
+
+PT["ru"].update({
+    "why_meme": "Что делаем: фраза недели из мема. Зачем: живая разговорная речь, как её правда говорят.",
+    "meme_head": "😄 Фраза недели", "meme_recall": "Вспомни перевод", "meme_reverse": "Вспомни по-венгерски",
+    "meme_pick": "Как это переводится?", "meme_note": "Что тут важно",
+    "meme_new": "Новая фраза недели: она будет с нами всю неделю.",
+})
+PT["uk"].update({
+    "why_meme": "Що робимо: фраза тижня з мему. Навіщо: жива розмовна мова, як її справді кажуть.",
+    "meme_head": "😄 Фраза тижня", "meme_recall": "Згадай переклад", "meme_reverse": "Згадай угорською",
+    "meme_pick": "Як це перекладається?", "meme_note": "Що тут важливо",
+    "meme_new": "Нова фраза тижня: вона буде з нами весь тиждень.",
+})
+PT["en"].update({
+    "why_meme": "What: the phrase of the week from a meme. Why: real spoken Hungarian, the way people say it.",
+    "meme_head": "😄 Phrase of the week", "meme_recall": "Recall the translation", "meme_reverse": "Recall it in Hungarian",
+    "meme_pick": "What does it mean?", "meme_note": "What matters here",
+    "meme_new": "A new phrase of the week: it stays with us all week.",
+})
+
+
+def meme_of(uid):
+    c = U(uid)["cycle"]
+    if not MEMES or not c:
+        return None
+    return MEMES[(max(1, c.get("n", 1)) - 1) % len(MEMES)]
+
+
+def meme_mode(uid):
+    """День недели решает, что делаем с фразой: узнаём, вспоминаем, выбираем, вспоминаем наоборот."""
+    c = U(uid)["cycle"]
+    d = max(1, c["days"]) if c else 1
+    return {1: "new", 2: "recall", 3: "quiz", 4: "note", 5: "reverse"}.get(d, "recall")
+
+
+def meme_image(m):
+    if m["id"] in _meme_bytes:
+        return _meme_bytes[m["id"]]
+    try:
+        data = base64.b64decode("".join(_memes.IMGS[m["id"]]))
+    except Exception:
+        data = None
+    _meme_bytes[m["id"]] = data
+    return data
+
+
+def send_meme(uid):
+    lang = user_lang(uid)
+    m = meme_of(uid)
+    if not m:
+        return
+    mode = meme_mode(uid)
+    esc = escape_markdown_v2
+    tr = m["ru"]
+    head = T(lang, "meme_head")
+    img = meme_image(m)
+    if img:
+        _photo_override[uid] = (m["id"], img)
+    kb = None
+    if mode == "new":
+        text = f"{head}\n\n{m['hu']}\n— {tr}\n\n💡 {m['note']}"
+        bot.send_message(uid, text)
+        return
+    if mode == "quiz":
+        others = [x["ru"] for x in MEMES if x["id"] != m["id"]]
+        random.shuffle(others)
+        opts = others[:2] + [tr]
+        random.shuffle(opts)
+        U(uid)["day"]["mq"] = {"ans": opts.index(tr), "opts": opts, "done": False, "id": m["id"]}
+        save_course()
+        kb = InlineKeyboardMarkup()
+        for k, o in enumerate(opts):
+            kb.row(InlineKeyboardButton(o[:60], callback_data=f"mq:{k}"))
+        bot.send_message(uid, f"{head} · {T(lang, 'meme_pick')}\n\n{m['hu']}", reply_markup=kb)
+        return
+    try:
+        if mode == "reverse":
+            body = f"{esc(head)} · {esc(T(lang, 'meme_reverse'))}\n\n{esc(tr)}\n||{esc(m['hu'])}||"
+        elif mode == "note":
+            body = f"{esc(head)}\n\n{esc(m['hu'])}\n||{esc(tr)}||\n\n💡 ||{esc(m['note'])}||"
+        else:
+            body = f"{esc(head)} · {esc(T(lang, 'meme_recall'))}\n\n{esc(m['hu'])}\n||{esc(tr)}||"
+        bot.send_message(uid, body, parse_mode="MarkdownV2")
+    except Exception as e:
+        print(f"Ошибка фразы недели: {e}")
+        bot.send_message(uid, f"{head}\n\n{m['hu']}\n— {tr}")
+
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("mq:"))
+def on_meme_quiz(call):
+    uid = call.from_user.id
+    lang = user_lang(uid)
+    try:
+        q = (U(uid)["day"] or {}).get("mq")
+        k = int(call.data.split(":")[1])
+        if not q or q["done"] or not 0 <= k < len(q["opts"]):
+            bot.answer_callback_query(call.id, T(lang, "stale"))
+            return
+        q["done"] = True
+        save_course()
+        m = next((x for x in MEMES if x["id"] == q["id"]), None)
+        right = k == q["ans"]
+        bot.answer_callback_query(call.id, "✅" if right else "❌")
+        head = "✅" if right else f"❌ {q['opts'][k]} → ✅"
+        bot.edit_message_text(f"{T(lang, 'meme_head')}\n\n{m['hu']}\n{head} {m['ru']}\n\n💡 {m['note']}",
+                              call.message.chat.id, call.message.message_id)
+    except Exception as e:
+        print(f"Ошибка вопроса по фразе: {e}")
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
 
 
 def send_stage(uid):
