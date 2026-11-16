@@ -1907,7 +1907,7 @@ _lock = threading.RLock()
 _USER_DEFAULTS = {
     "pace": PACE_DEFAULT, "win": "std", "setup": None, "claimed": [], "learned": [],
     "cycle": None, "day": None, "test": None, "ach": [], "marked": [], "page": 0, "wkn": 0,
-    "inten": "normal", "early": None, "next_btn": True, "kb_sent": False, "tidy": True, "pin_id": None, "trail": [], "kb_gone": False,
+    "inten": "normal", "early": None, "next_btn": True, "kb_sent": False, "tidy": True, "pin_id": None, "trail": [], "kb_gone": False, "story": None,
 }
 
 
@@ -2560,6 +2560,9 @@ def go_next(uid, chat_id):
     """«Дальше»: следующий шаг программы прямо сейчас, с пояснением что и зачем."""
     lang = user_lang(uid)
     u = U(uid)
+    if STORY_ON:
+        story_next(uid, chat_id)
+        return
     if u["setup"] != "ready":
         start_onboarding(uid, chat_id)
         return
@@ -2855,6 +2858,8 @@ def screen_header(uid):
     """Три строки над каждым сообщением: где мы, сколько сделано, когда тест."""
     lang = user_lang(uid)
     u = U(uid)
+    if STORY_ON:
+        return story_header(uid)
     c = u["cycle"]
     if not c:
         return ""
@@ -3054,6 +3059,239 @@ def on_meme_quiz(call):
             bot.answer_callback_query(call.id)
         except Exception:
             pass
+
+
+# ================================================================ ИСТОРИЯ: Réka пишет тебе, ты отвечаешь по-венгерски
+STORY_ON = os.getenv("REKA_MODE", "story") != "course"
+STORY_TITLE = "Не тот номер"
+# реплика: hu, ru; opts: (твой ответ hu, ru, реакция Réka hu, ru); meme: id мема из meme_imgs
+STORY = [
+    {"hu": "Szia! Dóri? Hol vagy? Már mindenki itt van!", "ru": "Привет! Дори? Где ты? Все уже здесь!", "opts": [
+        ("Nem vagyok Dóri.", "Я не Дори.", "Jaj, bocsi! Rossz számot írtam.", "Ой, прости! Я написала не на тот номер."),
+        ("Mindjárt ott vagyok!", "Скоро буду!", "Remek! ...Várj. Te nem vagy Dóri.", "Отлично! ...Стоп. Ты не Дори."),
+        ("Ki az a Dóri?", "Кто такая Дори?", "A legjobb barátnőm. Te meg ki vagy?", "Моя лучшая подруга. А ты кто?")]},
+    {"hu": "Annyira égő! Rossz számot írtam, és még a nevedet sem tudom.", "ru": "Как стыдно! Я написала не на тот номер и даже не знаю твоего имени.", "opts": [
+        ("Semmi baj!", "Ничего страшного!", "Kedves vagy. Köszi!", "Ты милый. Спасибо!"),
+        ("Hát ez tényleg égő. 😂", "Ну это правда стыдно.", "Hé! Ne nevess! ...Na jó, kicsit vicces.", "Эй! Не смейся! ...Ну ладно, чуть-чуть смешно."),
+        ("Nem mondom meg a nevem.", "Не скажу своё имя.", "Titok? Na, ez izgalmas.", "Секрет? Ну, это интересно.")]},
+    {"hu": "Amúgy Réka vagyok. Budapesten élek. Te hol laksz?", "ru": "Кстати, я Река. Живу в Будапеште. А ты где живёшь?", "opts": [
+        ("Budapesten.", "В Будапеште.", "Tényleg? Akkor találkozhatunk!", "Правда? Тогда можем встретиться!"),
+        ("Nem Magyarországon.", "Не в Венгрии.", "Akkor miért írsz magyarul?", "Тогда почему ты пишешь по-венгерски?"),
+        ("Titok.", "Секрет.", "Jó, jó. Nem kérdezek többet.", "Ладно, ладно. Больше не спрашиваю.")]},
+    {"meme": 0, "hu": "Küldök egy mémet, mert ez én vagyok.", "ru": "Шлю мем, потому что это я.", "opts": [
+        ("Haha, én is!", "Хаха, я тоже!", "Tudtam! Mi egy csapat vagyunk.", "Я знала! Мы одна команда."),
+        ("Nem értem. 😅", "Не понимаю.", "Semmi gond! Az éhes azt jelenti: голодный.", "Ничего страшного! «Éhes» значит «голодный».")]},
+    {"hu": "Figyelj, nincs kedved eljönni a buliba?", "ru": "Слушай, не хочешь прийти на вечеринку?", "opts": [
+        ("Igen, szívesen!", "Да, с удовольствием!", "Juhú! Péntek este nyolckor, a hetedik kerületben.", "Ура! В пятницу вечером в восемь, в седьмом районе."),
+        ("Nem, köszi.", "Нет, спасибо.", "Semmi baj, majd legközelebb.", "Ничего, в другой раз."),
+        ("Mikor és hol?", "Когда и где?", "Péntek este, a hetedik kerületben. Gyere!", "В пятницу вечером, в седьмом районе. Приходи!")]},
+    {"hu": "Hozz magaddal valamit inni!", "ru": "Принеси с собой что-нибудь выпить!", "opts": [
+        ("Sört hozok.", "Принесу пиво.", "Jó választás!", "Хороший выбор!"),
+        ("Üdítőt hozok.", "Принесу лимонад.", "Rendben, az is jó!", "Хорошо, это тоже ок!"),
+        ("Nem iszom.", "Я не пью.", "Semmi gond, van nálunk víz is.", "Ничего, у нас есть и вода.")]},
+    {"meme": 6, "hu": "Ez leszel te, amikor meglátsz engem.", "ru": "Это будешь ты, когда увидишь меня.", "opts": [
+        ("Pontosan. 😄", "Точно.", "Hahaha! Imádlak.", "Хахаха! Обожаю тебя."),
+        ("Te jössz.", "Твоя очередь (шутка).", "Na jó, de csak ma.", "Ладно, но только сегодня.")]},
+    {"hu": "Jaj, Dóri ír. Azt mondja, késik. Te hol vagy?", "ru": "Ой, Дори пишет. Говорит, опаздывает. А ты где?", "opts": [
+        ("Mindjárt ott vagyok!", "Скоро буду!", "Remek, várlak!", "Отлично, жду!"),
+        ("Elvesztem.", "Я потерялся.", "Hol vagy pontosan? Küldj egy képet!", "Где ты точно? Пришли фото!"),
+        ("Már itt vagyok!", "Я уже здесь!", "Hol? Nem látlak!", "Где? Я тебя не вижу!")]},
+    {"hu": "Várj... valaki jön. Ez nem lehet igaz! Ez az ex-em!", "ru": "Погоди... кто-то идёт. Не может быть! Это мой бывший!", "opts": [
+        ("Ki az?", "Кто это?", "Később mesélek.", "Позже расскажу."),
+        ("Fuss!", "Беги!", "Hova fussak?! Nevetek és sírok egyszerre.", "Куда бежать?! Я смеюсь и плачу одновременно."),
+        ("Nyugi, itt vagyok.", "Спокойно, я здесь.", "Köszi. Nagyon kedves vagy.", "Спасибо. Ты очень милый.")]},
+    {"hu": "Holnap folytatjuk! Folyt. köv.", "ru": "Завтра продолжим! Продолжение следует.", "opts": []},
+]
+
+
+def story_header(uid):
+    st = U(uid).get("story") or {}
+    i = st.get("i", 0)
+    if i > len(STORY) or st.get("feed"):
+        return "😄 Лента Réka: мемы и фразы\nЖми «Дальше» или просто жди: новое придёт само."
+    n = len(STORY)
+    k = min(max(i, 1), n)
+    fill = round(10 * k / n)
+    return f"💬 Réka пишет тебе · «{STORY_TITLE}»\n" + "▰" * fill + "▱" * (10 - fill) + f" {k}/{n}"
+
+
+def story_user(uid):
+    """Пользователь сразу готов: никаких анкет. Курс глаголов остаётся в коде, но не запускается."""
+    u = U(uid)
+    changed = False
+    if u["setup"] != "ready":
+        u["setup"] = "ready"
+        changed = True
+    if not u["cycle"]:
+        u["cycle"] = {"plan": [], "idx": 0, "days": 1, "max_days": 6, "state": "deliver", "pack": [], "credited": [],
+                      "review": False, "repeat": False, "closed": False, "n": 1}
+        changed = True
+    if not u.get("story"):
+        u["story"] = {"i": 0, "picks": [], "last": None, "day": None, "n": 0, "feed": False, "seen": []}
+        changed = True
+    u["tidy"] = True
+    if changed:
+        save_course()
+    return u["story"]
+
+
+def _md(s):
+    return escape_markdown_v2(s)
+
+
+def _story_markup(opts=None, beat_i=None):
+    kb = InlineKeyboardMarkup()
+    for k, o in enumerate(opts or []):
+        kb.row(InlineKeyboardButton(o[0][:60], callback_data=f"sa:{beat_i}:{k}"))
+    kb.row(InlineKeyboardButton("😄 Мем", callback_data="sm:go"))
+    return kb
+
+
+def _story_text(b, pick=None):
+    parts = [f"💬 Réka:\n{_md(b['hu'])}\n||{_md(b['ru'])}||"]
+    if pick is None and b["opts"]:
+        parts.append("Ответь одним из вариантов (перевод под скрытым текстом):\n" +
+                     "\n".join(f"• {_md(o[0])}  ||{_md(o[1])}||" for o in b["opts"]))
+    if pick is not None:
+        o = b["opts"][pick]
+        parts.append(f"🫵 Ты:\n{_md(o[0])}\n||{_md(o[1])}||")
+        parts.append(f"💬 Réka:\n{_md(o[2])}\n||{_md(o[3])}||")
+    return "\n\n".join(parts)
+
+
+def _meme_photo(mid):
+    if not MEMES:
+        return
+    m = next((x for x in MEMES if x["id"] == mid), None)
+    img = meme_image(m) if m else None
+    return (mid, img) if img else None
+
+
+def send_beat(uid, chat_id, i):
+    b = STORY[i]
+    ov = _meme_photo(b["meme"]) if "meme" in b else None
+    if ov:
+        _photo_override[chat_id] = ov
+    try:
+        bot.send_message(chat_id, _story_text(b), parse_mode="MarkdownV2", reply_markup=_story_markup(b["opts"], i))
+    except Exception as e:
+        print(f"Ошибка реплики: {e}")
+        _photo_override.pop(chat_id, None)
+        bot.send_message(chat_id, f"💬 Réka:\n{b['hu']}\n— {b['ru']}", reply_markup=_story_markup(b["opts"], i))
+
+
+def send_feed(uid, chat_id):
+    st = story_user(uid)
+    if not MEMES:
+        bot.send_message(chat_id, "💬 Réka:\nHamarosan új történet! ||Скоро новая история!||".replace("||", ""))
+        return
+    seen = [x for x in st.get("seen", []) if any(m["id"] == x for m in MEMES)]
+    pool = [m for m in MEMES if m["id"] not in seen] or list(MEMES)
+    if len(pool) == len(MEMES):
+        seen = []
+    m = random.choice(pool)
+    st["seen"] = seen + [m["id"]]
+    save_course()
+    ov = _meme_photo(m["id"])
+    if ov:
+        _photo_override[chat_id] = ov
+    kb = InlineKeyboardMarkup()
+    kb.row(InlineKeyboardButton("😄 Ещё мем", callback_data="sm:go"))
+    try:
+        bot.send_message(chat_id, f"😄 {_md(m['hu'])}\n||{_md(m['ru'])}||\n\n💡 ||{_md(m['note'])}||",
+                         parse_mode="MarkdownV2", reply_markup=kb)
+    except Exception as e:
+        print(f"Ошибка мема: {e}")
+        _photo_override.pop(chat_id, None)
+        bot.send_message(chat_id, f"😄 {m['hu']}\n— {m['ru']}\n\n💡 {m['note']}", reply_markup=kb)
+
+
+def story_start(uid, chat_id):
+    st = story_user(uid)
+    if st["i"] == 0 and not st["feed"]:
+        _prefix[chat_id] = ("Привет! Это Réka. Дальше я пишу тебе сама, как подруга: шлю истории и мемы по-венгерски. "
+                            "Ничего учить не надо: отвечай кнопкой, а непонятное открывай под скрытым текстом.")
+        story_next(uid, chat_id)
+    else:
+        story_next(uid, chat_id)
+
+
+def story_next(uid, chat_id, silent=False):
+    st = story_user(uid)
+    if st["i"] >= len(STORY) or st.get("feed"):
+        st["feed"] = True
+        st["i"] = len(STORY) + 1
+        st["last"] = budapest_now().isoformat()
+        save_course()
+        send_feed(uid, chat_id)
+        return
+    i = st["i"]
+    st["i"] += 1
+    st["last"] = budapest_now().isoformat()
+    save_course()
+    send_beat(uid, chat_id, i)
+
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("sa:"))
+def on_story_pick(call):
+    uid = call.from_user.id
+    try:
+        _, i_s, k_s = call.data.split(":")
+        i, k = int(i_s), int(k_s)
+        st = story_user(uid)
+        b = STORY[i]
+        bot.answer_callback_query(call.id)
+        st["picks"] = (st.get("picks") or [])[-50:] + [[i, k]]
+        save_course()
+        bot.edit_message_text(_story_text(b, k), call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
+    except Exception as e:
+        print(f"Ошибка выбора: {e}")
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "sm:go")
+def on_story_meme(call):
+    uid = call.from_user.id
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+    send_feed(uid, call.message.chat.id)
+
+
+STORY_GAP_MIN = 180          # новая реплика сама приходит не чаще, чем раз в 3 часа
+STORY_PER_DAY = 3
+
+
+def story_tick(uid, now):
+    u = U(uid)
+    if not u.get("story"):                      # старый пользователь: история стартует сама
+        if active_trainings.get(uid, {}).get("lang") and now.hour >= 9:
+            story_start(uid, uid)
+        return
+    st = u["story"]
+    a, b = window(uid)
+    now_min = now.hour * 60 + now.minute
+    if now_min < a * 60 or now_min > b * 60:
+        return
+    today = now.date().isoformat()
+    if st.get("day") != today:
+        st["day"], st["n"] = today, 0
+    if st["n"] >= STORY_PER_DAY:
+        return
+    if st.get("last"):
+        try:
+            last = datetime.fromisoformat(st["last"])
+            if (now - last).total_seconds() < STORY_GAP_MIN * 60:
+                return
+        except Exception:
+            pass
+    st["n"] += 1
+    save_course()
+    story_next(uid, uid)
 
 
 def send_stage(uid):
@@ -3354,6 +3592,9 @@ def ob_markup(uid):
 
 
 def start_onboarding(uid, chat_id=None):
+    if STORY_ON:
+        story_start(uid, chat_id or uid)
+        return
     lang = user_lang(uid)
     u = U(uid)
     u["setup"], u["marked"], u["page"] = "onb", [], 0
@@ -3364,7 +3605,7 @@ def start_onboarding(uid, chat_id=None):
 def resume_onboarding(uid, chat_id):
     """Знакомство прервалось (например, бот перезапускался): показываем текущий экран, отметки сохраняются."""
     u = U(uid)
-    if u["setup"] != "onb":
+    if STORY_ON or u["setup"] != "onb":
         start_onboarding(uid, chat_id)
         return
     bot.send_message(chat_id, T(user_lang(uid), "ob_hi").format(kao=random.choice(KAO_HAPPY)), reply_markup=ob_markup(uid))
@@ -3714,6 +3955,9 @@ def cmd_phrase(message):
 def tick_user(uid, now):
     lang = user_lang(uid)
     u = U(uid)
+    if STORY_ON:
+        story_tick(uid, now)
+        return
     today = now.date()
     now_min = now.hour * 60 + now.minute
     if u["setup"] is None:
