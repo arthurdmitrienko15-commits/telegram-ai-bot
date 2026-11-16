@@ -2571,6 +2571,7 @@ def go_next(uid, chat_id):
     day = u["day"]
     if not day or day["date"] != now.date().isoformat():
         day = build_day(uid, now.date())
+    ensure_meme(uid, day)
     if day["state"] == "test":
         _prefix[chat_id] = T(lang, "go_test")
         reason = start_test(uid, chat_id)
@@ -3681,6 +3682,35 @@ def cmd_drill(message):
 
 
 # ---------------------------------------------------------------- расписание
+def ensure_meme(uid, day):
+    """День, составленный до обновления, не знает про фразу недели: добавляем её шагом перед итогом."""
+    c = U(uid)["cycle"]
+    if not (MEMES and day and c and day.get("state") == "deliver" and not c.get("review")):
+        return
+    names = [n for n, _m in day["frames"]]
+    if "meme" in names:
+        return
+    pos = names.index("recap") if "recap" in names else len(names)
+    minute = day["frames"][pos][1] if pos < len(day["frames"]) else (day["frames"][-1][1] if day["frames"] else 0)
+    day["frames"].insert(pos, ["meme", minute])
+    save_course()
+
+
+@bot.message_handler(commands=["phrase", "meme"])
+def cmd_phrase(message):
+    uid = message.from_user.id
+    all_users.add(uid)
+    if U(uid)["setup"] != "ready":
+        resume_onboarding(uid, message.chat.id)
+        return
+    if not MEMES:
+        bot.send_message(uid, "Фраз недели пока нет: файл meme_imgs.py не загружен рядом с bot.py.")
+        return
+    if U(uid)["cycle"] is None:
+        new_cycle(uid)
+    send_meme(uid)
+
+
 def tick_user(uid, now):
     lang = user_lang(uid)
     u = U(uid)
@@ -3701,6 +3731,7 @@ def tick_user(uid, now):
         day = build_day(uid, today)
     if not day:
         return
+    ensure_meme(uid, day)
     for name, minute in list(day["frames"]):
         if name in day["sent"] or now_min < minute:
             continue
@@ -3871,6 +3902,7 @@ except Exception as e:
 print(f"Данные лежат в: {DATA_DIR} (пользователей в файле: {len(_store)}). Если после каждого обновления бота это число 0, нужен постоянный диск (Volume).")
 threading.Thread(target=daily_reminders_loop, daemon=True).start()
 
+print(f"Фраз недели загружено: {len(MEMES)}" + ("" if MEMES else " (нет meme_imgs.py рядом с bot.py)"))
 print("Река запущена...")
 
 while True:
