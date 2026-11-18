@@ -3064,7 +3064,7 @@ def on_meme_quiz(call):
 # ================================================================ ТЕТРАДЬ: всё венгерское, что встретил, раскладывается по полкам
 NB_ON = os.getenv("REKA_MODE", "tetrad") != "course"
 
-# Покедекс: самые ходовые слова (основы). Каждое найденное в твоих записях открывает клетку.
+# Встроенный мини-словарь: переводит самые ходовые слова, даже когда ИИ недоступен.
 CORE_RAW = """
 én=я;te=ты;ő=он, она;mi=мы;ti=вы;ők=они;ez=это;az=то, тот;itt=здесь;ott=там;igen=да;nem=нет;és=и;vagy=или;de=но
 hogy=что, как;nagyon=очень;jó=хороший;rossz=плохой;nagy=большой;kicsi=маленький;új=новый;régi=старый;szép=красивый
@@ -3169,20 +3169,6 @@ def nb_user(uid):
     return u["nb"]
 
 
-def nb_found(nb):
-    return set(nb.get("found", []))
-
-
-def nb_open_words(entry):
-    """Какие клетки Покедекса открывает запись: слова из лемм и из самой фразы."""
-    cands = set()
-    for w in (entry.get("lemmas") or []) + re.findall(r"\w+", entry.get("hu") or ""):
-        w = _nb_norm(w)
-        if w in CORE:
-            cands.add(w)
-    return cands
-
-
 def nb_parse(raw):
     m = re.search(r"\{.*\}", raw or "", re.S)
     if not m:
@@ -3200,20 +3186,30 @@ def nb_parse(raw):
     return out
 
 
+NB_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+_nb_err = {"msg": ""}
+
+
 def nb_analyze(text):
-    """Разбор записи через ИИ. Нет ИИ или он ошибся: вернём None, запись сохранится «на потом»."""
+    """Разбор записи через ИИ. Причина неудачи запоминается, чтобы её было видно в карточке."""
     if not client:
+        _nb_err["msg"] = "боту не передан ключ GROQ_API_KEY (или не установлена библиотека groq)"
         return None
-    for model in GROQ_MODELS:
-        try:
-            done = client.chat.completions.create(
-                model=model, temperature=0.2, max_tokens=300,
-                messages=[{"role": "system", "content": NB_PROMPT}, {"role": "user", "content": text[:300]}])
-            d = nb_parse(done.choices[0].message.content)
-            if d is not None:
-                return d
-        except Exception as e:
-            print(f"Groq error ({model}): {e}")
+    for model in NB_MODELS:
+        for fmt in ({"type": "json_object"}, None):
+            try:
+                kw = {"response_format": fmt} if fmt else {}
+                done = client.chat.completions.create(
+                    model=model, temperature=0.2, max_tokens=300,
+                    messages=[{"role": "system", "content": NB_PROMPT}, {"role": "user", "content": text[:300]}], **kw)
+                d = nb_parse(done.choices[0].message.content)
+                if d is not None:
+                    _nb_err["msg"] = ""
+                    return d
+                _nb_err["msg"] = "ИИ ответил не в том формате"
+            except Exception as e:
+                _nb_err["msg"] = f"{model}: {str(e)[:110]}"
+                print(f"Groq error ({model}): {e}")
     return None
 
 
@@ -3226,7 +3222,7 @@ def nb_fallback(text):
 
 
 def nb_add_one(uid, text):
-    """Возвращает (запись, новые клетки Покедекса)."""
+    """Возвращает (запись, пустое множество)."""
     nb = nb_user(uid)
     text = text.strip()
     d = nb_analyze(text) or nb_fallback(text)
@@ -3243,25 +3239,18 @@ def nb_add_one(uid, text):
          "topic": d["topic"], "lemmas": d["lemmas"], "pending": pending, "src": text, "ts": budapest_now().isoformat()}
     nb["next_id"] += 1
     nb["items"].append(e)
-    new = nb_open_words(e) - nb_found(nb)
-    nb["found"] = sorted(nb_found(nb) | new)
     save_course()
-    return e, new
+    return e, set()
 
 
 def nb_header(uid):
     nb = U(uid).get("nb") or {}
-    items, found = nb.get("items", []), nb.get("found", [])
-    k, n = len(found), len(CORE)
-    fill = round(10 * k / max(1, n))
-    return f"📚 Тетрадь Réka · записей: {len(items)}\n🎴 Покедекс {'▰' * fill}{'▱' * (10 - fill)} {k}/{n}"
+    return f"📚 Тетрадь Réka · записей: {len(nb.get('items', []))}"
 
 
 def nb_markup(entry_id=None):
     kb = InlineKeyboardMarkup()
-    row = [InlineKeyboardButton("📚 Тетрадь", callback_data="nb:f")]
-    row.append(InlineKeyboardButton("🎴 Покедекс", callback_data="nb:p"))
-    kb.row(*row)
+    kb.row(InlineKeyboardButton("📚 Тетрадь", callback_data="nb:f"))
     if entry_id:
         kb.row(InlineKeyboardButton("🗑 Удалить", callback_data=f"nb:d:{entry_id}"))
     return kb
@@ -3272,18 +3261,17 @@ def nb_card(e, new):
     if e["ru"]:
         lines.append(e["ru"])
     else:
-        lines.append("(перевод добавлю, как только ИИ будет доступен)")
+        lines.append("⚠️ Перевести не вышло: " + (_nb_err["msg"] or "ИИ не ответил") + "\nЗапись сохранена, попробую ещё раз.")
     if e["note"]:
         lines += ["", "💡 " + e["note"]]
     lines += ["", f"📁 {e['topic']}"]
-    if new:
-        lines.append("🎴 Новое в Покедексе: " + ", ".join(sorted(new)))
     return "\n".join(lines)
 
 
 def nb_add(uid, chat_id, text, mid=None):
     nb_user(uid)
     nb_sweep(chat_id, mid)
+    nb_fill_pending(uid, 2)
     parts = [p.strip() for p in re.split(r"[\n]+", text) if p.strip()][:8]
     done, allnew = [], set()
     for p in parts:
@@ -3299,8 +3287,6 @@ def nb_add(uid, chat_id, text, mid=None):
         bot.send_message(chat_id, nb_card(done[0], allnew), reply_markup=nb_markup(done[0]["id"]))
         return
     lines = [f"📝 Записала {len(done)}:"] + [f"• {e['hu']} — {e['ru'] or '…'}" for e in done]
-    if allnew:
-        lines += ["", "🎴 Новое в Покедексе: " + ", ".join(sorted(allnew))]
     bot.send_message(chat_id, "\n".join(lines), reply_markup=nb_markup())
 
 
@@ -3319,7 +3305,6 @@ def nb_folders_view(uid):
                 row = []
     if row:
         kb.row(*row)
-    kb.row(InlineKeyboardButton("🎴 Покедекс", callback_data="nb:p"))
     text = "📚 Твоя тетрадь по полкам. Пиши мне любое слово или фразу, и я положу её на нужную полку." if nb["items"] else \
         "📚 Тетрадь пока пустая. Напиши мне любое слово, фразу, место или песню, которые встретил, по-венгерски или по-русски."
     return text, kb
@@ -3348,20 +3333,6 @@ def nb_topic_view(uid, ti, page):
     return "\n".join(lines)[:1000], kb
 
 
-def nb_pokedex_view(uid):
-    nb = nb_user(uid)
-    found = nb_found(nb)
-    cells = "".join(("✅" if w in found else "⬜") for w in CORE_LIST)
-    grid = "\n".join(cells[i:i + 10] for i in range(0, len(cells), 10))
-    last = [w for w in nb["found"]][-8:]
-    lines = [f"🎴 Покедекс: открыто {len(found)} из {len(CORE)} ходовых слов", "", grid]
-    if last:
-        lines += ["", "Недавно: " + ", ".join(f"{w} — {CORE[w]}" for w in last[-4:])]
-    kb = InlineKeyboardMarkup()
-    kb.row(InlineKeyboardButton("📚 Полки", callback_data="nb:f"))
-    return "\n".join(lines)[:1000], kb
-
-
 @bot.message_handler(commands=["tetrad", "notebook"])
 def cmd_tetrad(message):
     uid = message.from_user.id
@@ -3372,14 +3343,6 @@ def cmd_tetrad(message):
     bot.send_message(message.chat.id, text, reply_markup=kb)
 
 
-@bot.message_handler(commands=["pokedex"])
-def cmd_pokedex(message):
-    uid = message.from_user.id
-    all_users.add(uid)
-    text, kb = nb_pokedex_view(uid)
-    bot.send_message(message.chat.id, text, reply_markup=kb)
-
-
 def nb_start(uid, chat_id):
     nb = nb_user(uid)
     if nb["items"]:
@@ -3387,7 +3350,7 @@ def nb_start(uid, chat_id):
         bot.send_message(chat_id, text, reply_markup=kb)
         return
     _prefix[chat_id] = ("Привет! Это Réka. Я твоя умная тетрадь для венгерского. Пиши мне любое слово, фразу, место или песню, "
-                        "которые встретил: по-венгерски или по-русски. Я переведу, положу на нужную полку и отмечу в Покедексе. "
+                        "которые встретил: по-венгерски или по-русски. Я переведу и положу на нужную полку. "
                         "Ничего учить и сдавать не надо.")
     text, kb = nb_folders_view(uid)
     bot.send_message(chat_id, text, reply_markup=kb)
@@ -3414,9 +3377,6 @@ def on_nb(call):
         if act == "f":
             text, kb = nb_folders_view(uid)
             bot.send_message(chat, text, reply_markup=kb)
-        elif act == "p":
-            text, kb = nb_pokedex_view(uid)
-            bot.send_message(chat, text, reply_markup=kb)
         elif act == "t":
             text, kb = nb_topic_view(uid, int(parts[2]), int(parts[3]))
             bot.send_message(chat, text, reply_markup=kb)
@@ -3424,10 +3384,6 @@ def on_nb(call):
             nb = nb_user(uid)
             eid = int(parts[2])
             nb["items"] = [e for e in nb["items"] if e["id"] != eid]
-            left = set()
-            for e in nb["items"]:
-                left |= nb_open_words(e)
-            nb["found"] = sorted(w for w in nb["found"] if w in left)
             save_course()
             text, kb = nb_folders_view(uid)
             bot.send_message(chat, "🗑 Удалила.\n\n" + text, reply_markup=kb)
@@ -3446,7 +3402,6 @@ def nb_fill_pending(uid, limit=3):
             n += 1
             if d and d["hu"]:
                 e.update(hu=d["hu"], ru=d["ru"], note=d["note"], topic=d["topic"], lemmas=d["lemmas"], pending=False)
-                nb["found"] = sorted(nb_found(nb) | nb_open_words(e))
     if n:
         save_course()
 
