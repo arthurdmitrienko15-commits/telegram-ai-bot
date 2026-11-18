@@ -1907,7 +1907,7 @@ _lock = threading.RLock()
 _USER_DEFAULTS = {
     "pace": PACE_DEFAULT, "win": "std", "setup": None, "claimed": [], "learned": [],
     "cycle": None, "day": None, "test": None, "ach": [], "marked": [], "page": 0, "wkn": 0,
-    "inten": "normal", "early": None, "next_btn": True, "kb_sent": False, "tidy": True, "pin_id": None, "trail": [], "kb_gone": False, "story": None,
+    "inten": "normal", "early": None, "next_btn": True, "kb_sent": False, "tidy": True, "pin_id": None, "trail": [], "kb_gone": False, "story": None, "nb": None,
 }
 
 
@@ -2560,8 +2560,8 @@ def go_next(uid, chat_id):
     """«Дальше»: следующий шаг программы прямо сейчас, с пояснением что и зачем."""
     lang = user_lang(uid)
     u = U(uid)
-    if STORY_ON:
-        story_next(uid, chat_id)
+    if NB_ON:
+        nb_next(uid, chat_id)
         return
     if u["setup"] != "ready":
         start_onboarding(uid, chat_id)
@@ -2858,8 +2858,8 @@ def screen_header(uid):
     """Три строки над каждым сообщением: где мы, сколько сделано, когда тест."""
     lang = user_lang(uid)
     u = U(uid)
-    if STORY_ON:
-        return story_header(uid)
+    if NB_ON:
+        return nb_header(uid)
     c = u["cycle"]
     if not c:
         return ""
@@ -3061,142 +3061,331 @@ def on_meme_quiz(call):
             pass
 
 
-# ================================================================ ИСТОРИЯ: Réka пишет тебе, ты отвечаешь по-венгерски
-STORY_ON = os.getenv("REKA_MODE", "story") != "course"
-STORY_TITLE = "Не тот номер"
-# реплика: hu, ru; opts: (твой ответ hu, ru, реакция Réka hu, ru); meme: id мема из meme_imgs
-STORY = [
-    {"hu": "Szia! Dóri? Hol vagy? Már mindenki itt van!", "ru": "Привет! Дори? Где ты? Все уже здесь!", "opts": [
-        ("Nem vagyok Dóri.", "Я не Дори.", "Jaj, bocsi! Rossz számot írtam.", "Ой, прости! Я написала не на тот номер."),
-        ("Mindjárt ott vagyok!", "Скоро буду!", "Remek! ...Várj. Te nem vagy Dóri.", "Отлично! ...Стоп. Ты не Дори."),
-        ("Ki az a Dóri?", "Кто такая Дори?", "A legjobb barátnőm. Te meg ki vagy?", "Моя лучшая подруга. А ты кто?")]},
-    {"hu": "Annyira égő! Rossz számot írtam, és még a nevedet sem tudom.", "ru": "Как стыдно! Я написала не на тот номер и даже не знаю твоего имени.", "opts": [
-        ("Semmi baj!", "Ничего страшного!", "Kedves vagy. Köszi!", "Ты милый. Спасибо!"),
-        ("Hát ez tényleg égő. 😂", "Ну это правда стыдно.", "Hé! Ne nevess! ...Na jó, kicsit vicces.", "Эй! Не смейся! ...Ну ладно, чуть-чуть смешно."),
-        ("Nem mondom meg a nevem.", "Не скажу своё имя.", "Titok? Na, ez izgalmas.", "Секрет? Ну, это интересно.")]},
-    {"hu": "Amúgy Réka vagyok. Budapesten élek. Te hol laksz?", "ru": "Кстати, я Река. Живу в Будапеште. А ты где живёшь?", "opts": [
-        ("Budapesten.", "В Будапеште.", "Tényleg? Akkor találkozhatunk!", "Правда? Тогда можем встретиться!"),
-        ("Nem Magyarországon.", "Не в Венгрии.", "Akkor miért írsz magyarul?", "Тогда почему ты пишешь по-венгерски?"),
-        ("Titok.", "Секрет.", "Jó, jó. Nem kérdezek többet.", "Ладно, ладно. Больше не спрашиваю.")]},
-    {"meme": 0, "hu": "Küldök egy mémet, mert ez én vagyok.", "ru": "Шлю мем, потому что это я.", "opts": [
-        ("Haha, én is!", "Хаха, я тоже!", "Tudtam! Mi egy csapat vagyunk.", "Я знала! Мы одна команда."),
-        ("Nem értem. 😅", "Не понимаю.", "Semmi gond! Az éhes azt jelenti: голодный.", "Ничего страшного! «Éhes» значит «голодный».")]},
-    {"hu": "Figyelj, nincs kedved eljönni a buliba?", "ru": "Слушай, не хочешь прийти на вечеринку?", "opts": [
-        ("Igen, szívesen!", "Да, с удовольствием!", "Juhú! Péntek este nyolckor, a hetedik kerületben.", "Ура! В пятницу вечером в восемь, в седьмом районе."),
-        ("Nem, köszi.", "Нет, спасибо.", "Semmi baj, majd legközelebb.", "Ничего, в другой раз."),
-        ("Mikor és hol?", "Когда и где?", "Péntek este, a hetedik kerületben. Gyere!", "В пятницу вечером, в седьмом районе. Приходи!")]},
-    {"hu": "Hozz magaddal valamit inni!", "ru": "Принеси с собой что-нибудь выпить!", "opts": [
-        ("Sört hozok.", "Принесу пиво.", "Jó választás!", "Хороший выбор!"),
-        ("Üdítőt hozok.", "Принесу лимонад.", "Rendben, az is jó!", "Хорошо, это тоже ок!"),
-        ("Nem iszom.", "Я не пью.", "Semmi gond, van nálunk víz is.", "Ничего, у нас есть и вода.")]},
-    {"meme": 6, "hu": "Ez leszel te, amikor meglátsz engem.", "ru": "Это будешь ты, когда увидишь меня.", "opts": [
-        ("Pontosan. 😄", "Точно.", "Hahaha! Imádlak.", "Хахаха! Обожаю тебя."),
-        ("Te jössz.", "Твоя очередь (шутка).", "Na jó, de csak ma.", "Ладно, но только сегодня.")]},
-    {"hu": "Jaj, Dóri ír. Azt mondja, késik. Te hol vagy?", "ru": "Ой, Дори пишет. Говорит, опаздывает. А ты где?", "opts": [
-        ("Mindjárt ott vagyok!", "Скоро буду!", "Remek, várlak!", "Отлично, жду!"),
-        ("Elvesztem.", "Я потерялся.", "Hol vagy pontosan? Küldj egy képet!", "Где ты точно? Пришли фото!"),
-        ("Már itt vagyok!", "Я уже здесь!", "Hol? Nem látlak!", "Где? Я тебя не вижу!")]},
-    {"hu": "Várj... valaki jön. Ez nem lehet igaz! Ez az ex-em!", "ru": "Погоди... кто-то идёт. Не может быть! Это мой бывший!", "opts": [
-        ("Ki az?", "Кто это?", "Később mesélek.", "Позже расскажу."),
-        ("Fuss!", "Беги!", "Hova fussak?! Nevetek és sírok egyszerre.", "Куда бежать?! Я смеюсь и плачу одновременно."),
-        ("Nyugi, itt vagyok.", "Спокойно, я здесь.", "Köszi. Nagyon kedves vagy.", "Спасибо. Ты очень милый.")]},
-    {"hu": "Holnap folytatjuk! Folyt. köv.", "ru": "Завтра продолжим! Продолжение следует.", "opts": []},
-]
+# ================================================================ ТЕТРАДЬ: всё венгерское, что встретил, раскладывается по полкам
+NB_ON = os.getenv("REKA_MODE", "tetrad") != "course"
+
+# Покедекс: самые ходовые слова (основы). Каждое найденное в твоих записях открывает клетку.
+CORE_RAW = """
+én=я;te=ты;ő=он, она;mi=мы;ti=вы;ők=они;ez=это;az=то, тот;itt=здесь;ott=там;igen=да;nem=нет;és=и;vagy=или;de=но
+hogy=что, как;nagyon=очень;jó=хороший;rossz=плохой;nagy=большой;kicsi=маленький;új=новый;régi=старый;szép=красивый
+sok=много;kevés=мало;minden=всё;semmi=ничего;valaki=кто-то;ki=кто;mit=что;hol=где;mikor=когда;miért=почему;hogyan=как
+mennyi=сколько;van=есть, быть;lesz=будет;megy=идти;jön=приходить;csinál=делать;mond=говорить;lát=видеть;hall=слышать
+tud=мочь, знать;akar=хотеть;kell=нужно;szeret=любить;eszik=есть, кушать;iszik=пить;alszik=спать;dolgozik=работать
+tanul=учить;ad=давать;vesz=брать, покупать;kér=просить;kap=получать;talál=находить;keres=искать;néz=смотреть;hív=звать
+él=жить;lakik=проживать;ír=писать;olvas=читать;vár=ждать;kezd=начинать;segít=помогать;gondol=думать;tetszik=нравиться
+érez=чувствовать;ért=понимать;beszél=разговаривать;fizet=платить;hoz=приносить;visz=нести, везти;ül=сидеть;áll=стоять
+nyit=открывать;zár=закрывать;ember=человек;nap=день, солнце;idő=время, погода;év=год;hét=неделя, семь;hónap=месяц
+óra=час, урок;perc=минута;ház=дом;lakás=квартира;szoba=комната;város=город;utca=улица;ország=страна;víz=вода;étel=еда
+kenyér=хлеб;tej=молоко;kávé=кофе;sör=пиво;bor=вино;pénz=деньги;munka=работа;iskola=школа;barát=друг;család=семья
+anya=мама;apa=папа;gyerek=ребёнок;férfi=мужчина;nő=женщина;fiú=парень, мальчик;lány=девушка, девочка;név=имя
+kéz=рука;fej=голова;szem=глаз;autó=машина;busz=автобус;vonat=поезд;út=дорога;jegy=билет;bolt=магазин;piac=рынок
+étterem=ресторан;telefon=телефон;virág=цветок;csokor=букет;könyv=книга;zene=музыка;film=фильм;élet=жизнь
+szerelem=любовь;szó=слово;kérdés=вопрос;probléma=проблема;hely=место;dolog=вещь;reggel=утро;este=вечер
+éjszaka=ночь;ma=сегодня;holnap=завтра;tegnap=вчера;most=сейчас;mindig=всегда;soha=никогда;még=ещё;már=уже
+aztán=потом;akkor=тогда;csak=только;is=тоже;köszönöm=спасибо;kérem=пожалуйста;bocsánat=извините;szia=привет
+viszlát=пока;szívesen=охотно, пожалуйста;segítség=помощь;egy=один;kettő=два;három=три;négy=четыре;öt=пять;hat=шесть
+nyolc=восемь;kilenc=девять;tíz=десять;száz=сто;ezer=тысяча;fehér=белый;fekete=чёрный;piros=красный;kék=синий
+zöld=зелёный;sárga=жёлтый;közel=близко;messze=далеко;jobb=правый, лучше;bal=левый;drága=дорогой;olcsó=дешёвый
+meleg=тёплый;hideg=холодный;gyors=быстрый;lassú=медленный;könnyű=лёгкий;nehéz=трудный;igaz=правда;fontos=важный
+érdekes=интересный;vicces=смешной;éhes=голодный;fáradt=усталый;boldog=счастливый;szomorú=грустный;beteg=больной
+kész=готов;ajándék=подарок;kutya=собака;macska=кошка;tél=зима;nyár=лето;eső=дождь;hó=снег
+"""
+CORE = {}
+for _p in CORE_RAW.replace("\n", ";").split(";"):
+    if "=" in _p:
+        _h, _r = _p.split("=", 1)
+        CORE[_h.strip().lower()] = _r.strip()
+CORE_LIST = sorted(CORE)
+
+NB_TOPICS = ["Еда и напитки", "Дом и быт", "Транспорт и места", "Работа и деньги", "Люди и семья", "Чувства", "Сленг и мемы",
+             "Музыка и фильмы", "Время и числа", "Разное"]
+
+NB_PROMPT = (
+    "Ты словарь венгерского для русскоговорящего. Пользователь прислал слово, фразу, название места или песни "
+    "(по-венгерски или по-русски). Верни ТОЛЬКО JSON без пояснений: "
+    '{"type":"word|phrase|slang|place|song|other","hu":"венгерский вариант","ru":"перевод на русский",'
+    '"note":"коротко по-русски: как используется, регистр, важная форма (до 110 символов)",'
+    '"topic":"одна из: ' + "; ".join(NB_TOPICS) + '",'
+    '"lemmas":["словарные формы венгерских слов из hu, до 8"]}. '
+    "Если пришло по-русски, дай венгерский перевод в hu. Если это не слово и не фраза, верни type other, hu и ru пустые. "
+    "Не выдумывай: если не уверен в слове, так и скажи в note."
+)
 
 
-def story_header(uid):
-    st = U(uid).get("story") or {}
-    i = st.get("i", 0)
-    if i > len(STORY) or st.get("feed"):
-        return "😄 Лента Réka: мемы и фразы\nЖми «Дальше» или просто жди: новое придёт само."
-    n = len(STORY)
-    k = min(max(i, 1), n)
-    fill = round(10 * k / n)
-    return f"💬 Réka пишет тебе · «{STORY_TITLE}»\n" + "▰" * fill + "▱" * (10 - fill) + f" {k}/{n}"
-
-
-def story_user(uid):
-    """Пользователь сразу готов: никаких анкет. Курс глаголов остаётся в коде, но не запускается."""
-    u = U(uid)
-    changed = False
-    if u["setup"] != "ready":
-        u["setup"] = "ready"
-        changed = True
-    if not u["cycle"]:
-        u["cycle"] = {"plan": [], "idx": 0, "days": 1, "max_days": 6, "state": "deliver", "pack": [], "credited": [],
-                      "review": False, "repeat": False, "closed": False, "n": 1}
-        changed = True
-    if not u.get("story"):
-        u["story"] = {"i": 0, "picks": [], "last": None, "day": None, "n": 0, "feed": False, "seen": []}
-        changed = True
-    u["tidy"] = True
-    if changed:
-        save_course()
-    return u["story"]
+def _nb_norm(w):
+    return re.sub(r"[^\w]", "", (w or "").lower())
 
 
 def _md(s):
     return escape_markdown_v2(s)
 
 
-def _story_markup(opts=None, beat_i=None):
-    kb = InlineKeyboardMarkup()
-    for k, o in enumerate(opts or []):
-        kb.row(InlineKeyboardButton(o[0][:60], callback_data=f"sa:{beat_i}:{k}"))
-    kb.row(InlineKeyboardButton("😄 Мем", callback_data="sm:go"))
-    return kb
-
-
-def _story_text(b, pick=None):
-    parts = [f"💬 Réka:\n{_md(b['hu'])}\n||{_md(b['ru'])}||"]
-    if pick is None and b["opts"]:
-        parts.append("Ответь одним из вариантов (перевод под скрытым текстом):\n" +
-                     "\n".join(f"• {_md(o[0])}  ||{_md(o[1])}||" for o in b["opts"]))
-    if pick is not None:
-        o = b["opts"][pick]
-        parts.append(f"🫵 Ты:\n{_md(o[0])}\n||{_md(o[1])}||")
-        parts.append(f"💬 Réka:\n{_md(o[2])}\n||{_md(o[3])}||")
-    return "\n\n".join(parts)
-
-
 def _meme_photo(mid):
     if not MEMES:
-        return
+        return None
     m = next((x for x in MEMES if x["id"] == mid), None)
     img = meme_image(m) if m else None
     return (mid, img) if img else None
 
 
-def send_beat(uid, chat_id, i):
-    b = STORY[i]
-    ov = _meme_photo(b["meme"]) if "meme" in b else None
-    if ov:
-        _photo_override[chat_id] = ov
+def nb_user(uid):
+    u = U(uid)
+    changed = False
+    if u["setup"] != "ready":
+        u["setup"], changed = "ready", True
+    if not u["cycle"]:
+        u["cycle"] = {"plan": [], "idx": 0, "days": 1, "max_days": 6, "state": "deliver", "pack": [], "credited": [],
+                      "review": False, "repeat": False, "closed": False, "n": 1}
+        changed = True
+    if not u.get("nb"):
+        u["nb"] = {"items": [], "found": [], "next_id": 1, "last": None, "day": None, "n": 0, "seen": [], "pos": 0}
+        changed = True
+    u["tidy"] = True
+    if changed:
+        save_course()
+    return u["nb"]
+
+
+def nb_found(nb):
+    return set(nb.get("found", []))
+
+
+def nb_open_words(entry):
+    """Какие клетки Покедекса открывает запись: слова из лемм и из самой фразы."""
+    cands = set()
+    for w in (entry.get("lemmas") or []) + re.findall(r"\w+", entry.get("hu") or ""):
+        w = _nb_norm(w)
+        if w in CORE:
+            cands.add(w)
+    return cands
+
+
+def nb_parse(raw):
+    m = re.search(r"\{.*\}", raw or "", re.S)
+    if not m:
+        return None
     try:
-        bot.send_message(chat_id, _story_text(b), parse_mode="MarkdownV2", reply_markup=_story_markup(b["opts"], i))
-    except Exception as e:
-        print(f"Ошибка реплики: {e}")
-        _photo_override.pop(chat_id, None)
-        bot.send_message(chat_id, f"💬 Réka:\n{b['hu']}\n— {b['ru']}", reply_markup=_story_markup(b["opts"], i))
+        d = json.loads(m.group(0))
+    except Exception:
+        return None
+    if not isinstance(d, dict):
+        return None
+    out = {k: str(d.get(k) or "").strip() for k in ("type", "hu", "ru", "note", "topic")}
+    out["lemmas"] = [str(x) for x in (d.get("lemmas") or []) if isinstance(x, (str, int))][:8]
+    if out["topic"] not in NB_TOPICS:
+        out["topic"] = "Разное"
+    return out
 
 
-def send_feed(uid, chat_id):
-    st = story_user(uid)
-    if not MEMES:
-        bot.send_message(chat_id, "💬 Réka:\nHamarosan új történet! ||Скоро новая история!||".replace("||", ""))
+def nb_analyze(text):
+    """Разбор записи через ИИ. Нет ИИ или он ошибся: вернём None, запись сохранится «на потом»."""
+    if not client:
+        return None
+    for model in GROQ_MODELS:
+        try:
+            done = client.chat.completions.create(
+                model=model, temperature=0.2, max_tokens=300,
+                messages=[{"role": "system", "content": NB_PROMPT}, {"role": "user", "content": text[:300]}])
+            d = nb_parse(done.choices[0].message.content)
+            if d is not None:
+                return d
+        except Exception as e:
+            print(f"Groq error ({model}): {e}")
+    return None
+
+
+def nb_fallback(text):
+    """Без ИИ: слово из ходового списка разбираем сами."""
+    w = _nb_norm(text)
+    if w in CORE:
+        return {"type": "word", "hu": text.strip(), "ru": CORE[w], "note": "", "topic": "Разное", "lemmas": [w]}
+    return None
+
+
+def nb_add_one(uid, text):
+    """Возвращает (запись, новые клетки Покедекса)."""
+    nb = nb_user(uid)
+    text = text.strip()
+    d = nb_analyze(text) or nb_fallback(text)
+    pending = d is None
+    if d is None:
+        d = {"type": "word", "hu": text, "ru": "", "note": "", "topic": "Разное", "lemmas": []}
+    if d["type"] == "other" and not d["hu"]:
+        return None, set()
+    e = {"id": nb["next_id"], "hu": d["hu"] or text, "ru": d["ru"], "note": d["note"], "type": d["type"],
+         "topic": d["topic"], "lemmas": d["lemmas"], "pending": pending, "src": text, "ts": budapest_now().isoformat()}
+    nb["next_id"] += 1
+    nb["items"].append(e)
+    new = nb_open_words(e) - nb_found(nb)
+    nb["found"] = sorted(nb_found(nb) | new)
+    save_course()
+    return e, new
+
+
+def nb_header(uid):
+    nb = U(uid).get("nb") or {}
+    items, found = nb.get("items", []), nb.get("found", [])
+    k, n = len(found), len(CORE)
+    fill = round(10 * k / max(1, n))
+    return f"📚 Тетрадь Réka · записей: {len(items)}\n🎴 Покедекс {'▰' * fill}{'▱' * (10 - fill)} {k}/{n}"
+
+
+def nb_markup(entry_id=None):
+    kb = InlineKeyboardMarkup()
+    row = [InlineKeyboardButton("📚 Тетрадь", callback_data="nb:f")]
+    row.append(InlineKeyboardButton("🎴 Покедекс", callback_data="nb:p"))
+    kb.row(*row)
+    if entry_id:
+        kb.row(InlineKeyboardButton("😄 Мем", callback_data="nb:m"), InlineKeyboardButton("🗑 Удалить", callback_data=f"nb:d:{entry_id}"))
+    else:
+        kb.row(InlineKeyboardButton("😄 Мем", callback_data="nb:m"))
+    return kb
+
+
+def nb_card(e, new):
+    lines = ["📝 Записала", "", e["hu"]]
+    if e["ru"]:
+        lines.append(e["ru"])
+    else:
+        lines.append("(перевод добавлю, как только ИИ будет доступен)")
+    if e["note"]:
+        lines += ["", "💡 " + e["note"]]
+    lines += ["", f"📁 {e['topic']}"]
+    if new:
+        lines.append("🎴 Новое в Покедексе: " + ", ".join(sorted(new)))
+    return "\n".join(lines)
+
+
+def nb_add(uid, chat_id, text):
+    nb_user(uid)
+    parts = [p.strip() for p in re.split(r"[\n]+", text) if p.strip()][:8]
+    done, allnew = [], set()
+    for p in parts:
+        e, new = nb_add_one(uid, p)
+        if e:
+            done.append(e)
+            allnew |= new
+    if not done:
+        bot.send_message(chat_id, "Не поняла, что тут сохранить. Пришли слово, фразу, место или песню, по-венгерски или по-русски.",
+                         reply_markup=nb_markup())
         return
-    seen = [x for x in st.get("seen", []) if any(m["id"] == x for m in MEMES)]
+    if len(done) == 1:
+        bot.send_message(chat_id, nb_card(done[0], allnew), reply_markup=nb_markup(done[0]["id"]))
+        return
+    lines = [f"📝 Записала {len(done)}:"] + [f"• {e['hu']} — {e['ru'] or '…'}" for e in done]
+    if allnew:
+        lines += ["", "🎴 Новое в Покедексе: " + ", ".join(sorted(allnew))]
+    bot.send_message(chat_id, "\n".join(lines), reply_markup=nb_markup())
+
+
+def nb_folders_view(uid):
+    nb = nb_user(uid)
+    cnt = {}
+    for e in nb["items"]:
+        cnt[e["topic"]] = cnt.get(e["topic"], 0) + 1
+    kb = InlineKeyboardMarkup()
+    row = []
+    for i, t in enumerate(NB_TOPICS):
+        if cnt.get(t):
+            row.append(InlineKeyboardButton(f"{t} · {cnt[t]}", callback_data=f"nb:t:{i}:0"))
+            if len(row) == 2:
+                kb.row(*row)
+                row = []
+    if row:
+        kb.row(*row)
+    kb.row(InlineKeyboardButton("🎴 Покедекс", callback_data="nb:p"))
+    text = "📚 Твоя тетрадь по полкам. Пиши мне любое слово или фразу, и я положу её на нужную полку." if nb["items"] else \
+        "📚 Тетрадь пока пустая. Напиши мне любое слово, фразу, место или песню, которые встретил, по-венгерски или по-русски."
+    return text, kb
+
+
+PAGE = 8
+
+
+def nb_topic_view(uid, ti, page):
+    nb = nb_user(uid)
+    t = NB_TOPICS[ti]
+    items = [e for e in nb["items"] if e["topic"] == t]
+    pages = max(1, math.ceil(len(items) / PAGE))
+    page = min(max(page, 0), pages - 1)
+    chunk = items[page * PAGE:(page + 1) * PAGE]
+    lines = [f"📁 {t} ({len(items)})", ""] + [f"• {e['hu']} — {e['ru'] or '…'}" for e in chunk]
+    kb = InlineKeyboardMarkup()
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"nb:t:{ti}:{page - 1}"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"nb:t:{ti}:{page + 1}"))
+    if nav:
+        kb.row(*nav)
+    kb.row(InlineKeyboardButton("📚 Полки", callback_data="nb:f"))
+    return "\n".join(lines)[:1000], kb
+
+
+def nb_pokedex_view(uid):
+    nb = nb_user(uid)
+    found = nb_found(nb)
+    cells = "".join(("✅" if w in found else "⬜") for w in CORE_LIST)
+    grid = "\n".join(cells[i:i + 10] for i in range(0, len(cells), 10))
+    last = [w for w in nb["found"]][-8:]
+    lines = [f"🎴 Покедекс: открыто {len(found)} из {len(CORE)} ходовых слов", "", grid]
+    if last:
+        lines += ["", "Недавно: " + ", ".join(f"{w} — {CORE[w]}" for w in last[-4:])]
+    kb = InlineKeyboardMarkup()
+    kb.row(InlineKeyboardButton("📚 Полки", callback_data="nb:f"))
+    return "\n".join(lines)[:1000], kb
+
+
+@bot.message_handler(commands=["tetrad", "notebook"])
+def cmd_tetrad(message):
+    uid = message.from_user.id
+    all_users.add(uid)
+    nb_user(uid)
+    text, kb = nb_folders_view(uid)
+    bot.send_message(message.chat.id, text, reply_markup=kb)
+
+
+@bot.message_handler(commands=["pokedex"])
+def cmd_pokedex(message):
+    uid = message.from_user.id
+    all_users.add(uid)
+    text, kb = nb_pokedex_view(uid)
+    bot.send_message(message.chat.id, text, reply_markup=kb)
+
+
+def nb_save_meme(uid, mid):
+    nb = nb_user(uid)
+    m = next((x for x in MEMES if x["id"] == mid), None)
+    if not m or any(e.get("meme") == mid for e in nb["items"]):
+        return None
+    e = {"id": nb["next_id"], "hu": m["hu"], "ru": m["ru"], "note": m["note"], "type": "slang", "topic": "Сленг и мемы",
+         "lemmas": [], "pending": False, "src": "meme", "meme": mid, "ts": budapest_now().isoformat()}
+    nb["next_id"] += 1
+    nb["items"].append(e)
+    new = nb_open_words(e) - nb_found(nb)
+    nb["found"] = sorted(nb_found(nb) | new)
+    save_course()
+    return e
+
+
+def nb_send_meme(uid, chat_id, auto=False):
+    nb = nb_user(uid)
+    if not MEMES:
+        bot.send_message(chat_id, "Мемов пока нет: нет файла meme_imgs.py рядом с bot.py.", reply_markup=nb_markup())
+        return
+    seen = [x for x in nb.get("seen", []) if any(m["id"] == x for m in MEMES)]
     pool = [m for m in MEMES if m["id"] not in seen] or list(MEMES)
     if len(pool) == len(MEMES):
         seen = []
     m = random.choice(pool)
-    st["seen"] = seen + [m["id"]]
+    nb["seen"] = seen + [m["id"]]
     save_course()
     ov = _meme_photo(m["id"])
     if ov:
         _photo_override[chat_id] = ov
     kb = InlineKeyboardMarkup()
-    kb.row(InlineKeyboardButton("😄 Ещё мем", callback_data="sm:go"))
+    kb.row(InlineKeyboardButton("💾 В тетрадь", callback_data=f"nb:s:{m['id']}"), InlineKeyboardButton("😄 Ещё", callback_data="nb:m"))
+    kb.row(InlineKeyboardButton("📚 Тетрадь", callback_data="nb:f"))
     try:
         bot.send_message(chat_id, f"😄 {_md(m['hu'])}\n||{_md(m['ru'])}||\n\n💡 ||{_md(m['note'])}||",
                          parse_mode="MarkdownV2", reply_markup=kb)
@@ -3206,92 +3395,128 @@ def send_feed(uid, chat_id):
         bot.send_message(chat_id, f"😄 {m['hu']}\n— {m['ru']}\n\n💡 {m['note']}", reply_markup=kb)
 
 
-def story_start(uid, chat_id):
-    st = story_user(uid)
-    if st["i"] == 0 and not st["feed"]:
-        _prefix[chat_id] = ("Привет! Это Réka. Дальше я пишу тебе сама, как подруга: шлю истории и мемы по-венгерски. "
-                            "Ничего учить не надо: отвечай кнопкой, а непонятное открывай под скрытым текстом.")
-        story_next(uid, chat_id)
-    else:
-        story_next(uid, chat_id)
-
-
-def story_next(uid, chat_id, silent=False):
-    st = story_user(uid)
-    if st["i"] >= len(STORY) or st.get("feed"):
-        st["feed"] = True
-        st["i"] = len(STORY) + 1
-        st["last"] = budapest_now().isoformat()
-        save_course()
-        send_feed(uid, chat_id)
+def nb_send_recall(uid, chat_id):
+    nb = nb_user(uid)
+    items = [e for e in nb["items"] if e["ru"]]
+    if not items:
+        nb_send_meme(uid, chat_id)
         return
-    i = st["i"]
-    st["i"] += 1
-    st["last"] = budapest_now().isoformat()
-    save_course()
-    send_beat(uid, chat_id, i)
-
-
-@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("sa:"))
-def on_story_pick(call):
-    uid = call.from_user.id
+    e = random.choice(items)
+    body = f"💭 Ты это сохранял:\n{_md(e['hu'])}\n||{_md(e['ru'])}||"
     try:
-        _, i_s, k_s = call.data.split(":")
-        i, k = int(i_s), int(k_s)
-        st = story_user(uid)
-        b = STORY[i]
-        bot.answer_callback_query(call.id)
-        st["picks"] = (st.get("picks") or [])[-50:] + [[i, k]]
-        save_course()
-        bot.edit_message_text(_story_text(b, k), call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
-    except Exception as e:
-        print(f"Ошибка выбора: {e}")
-        try:
-            bot.answer_callback_query(call.id)
-        except Exception:
-            pass
+        bot.send_message(chat_id, body, parse_mode="MarkdownV2", reply_markup=nb_markup())
+    except Exception:
+        bot.send_message(chat_id, f"💭 Ты это сохранял:\n{e['hu']}\n— {e['ru']}", reply_markup=nb_markup())
 
 
-@bot.callback_query_handler(func=lambda c: c.data == "sm:go")
-def on_story_meme(call):
+def nb_start(uid, chat_id):
+    nb = nb_user(uid)
+    if nb["items"]:
+        text, kb = nb_folders_view(uid)
+        bot.send_message(chat_id, text, reply_markup=kb)
+        return
+    _prefix[chat_id] = ("Привет! Это Réka. Я твоя умная тетрадь для венгерского. Пиши мне любое слово, фразу, место или песню, "
+                        "которые встретил: по-венгерски или по-русски. Я переведу, положу на нужную полку и отмечу в Покедексе. "
+                        "Ничего учить и сдавать не надо.")
+    text, kb = nb_folders_view(uid)
+    bot.send_message(chat_id, text, reply_markup=kb)
+
+
+def nb_next(uid, chat_id):
+    nb = nb_user(uid)
+    if nb["items"] and random.random() < 0.6:
+        nb_send_recall(uid, chat_id)
+    else:
+        nb_send_meme(uid, chat_id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("nb:"))
+def on_nb(call):
     uid = call.from_user.id
+    chat = call.message.chat.id
     try:
         bot.answer_callback_query(call.id)
     except Exception:
         pass
-    send_feed(uid, call.message.chat.id)
+    parts = call.data.split(":")
+    try:
+        act = parts[1]
+        if act == "f":
+            text, kb = nb_folders_view(uid)
+            bot.send_message(chat, text, reply_markup=kb)
+        elif act == "p":
+            text, kb = nb_pokedex_view(uid)
+            bot.send_message(chat, text, reply_markup=kb)
+        elif act == "t":
+            text, kb = nb_topic_view(uid, int(parts[2]), int(parts[3]))
+            bot.send_message(chat, text, reply_markup=kb)
+        elif act == "m":
+            nb_send_meme(uid, chat)
+        elif act == "s":
+            e = nb_save_meme(uid, int(parts[2]))
+            bot.answer_callback_query(call.id, "Сохранила в тетрадь" if e else "Уже в тетради")
+        elif act == "d":
+            nb = nb_user(uid)
+            eid = int(parts[2])
+            nb["items"] = [e for e in nb["items"] if e["id"] != eid]
+            left = set()
+            for e in nb["items"]:
+                left |= nb_open_words(e)
+            nb["found"] = sorted(w for w in nb["found"] if w in left)
+            save_course()
+            text, kb = nb_folders_view(uid)
+            bot.send_message(chat, "🗑 Удалила.\n\n" + text, reply_markup=kb)
+    except Exception as e:
+        print(f"Ошибка тетради: {e}")
 
 
-STORY_GAP_MIN = 180          # новая реплика сама приходит не чаще, чем раз в 3 часа
-STORY_PER_DAY = 3
+NB_GAP_MIN = 240
+NB_PER_DAY = 2
 
 
-def story_tick(uid, now):
-    u = U(uid)
-    if not u.get("story"):                      # старый пользователь: история стартует сама
-        if active_trainings.get(uid, {}).get("lang") and now.hour >= 9:
-            story_start(uid, uid)
+def nb_fill_pending(uid, limit=3):
+    nb = U(uid).get("nb")
+    if not nb or not client:
         return
-    st = u["story"]
+    n = 0
+    for e in nb["items"]:
+        if e.get("pending") and n < limit:
+            d = nb_analyze(e["src"])
+            n += 1
+            if d and d["hu"]:
+                e.update(hu=d["hu"], ru=d["ru"], note=d["note"], topic=d["topic"], lemmas=d["lemmas"], pending=False)
+                nb["found"] = sorted(nb_found(nb) | nb_open_words(e))
+    if n:
+        save_course()
+
+
+def nb_tick(uid, now):
+    u = U(uid)
+    if not u.get("nb"):
+        if active_trainings.get(uid, {}).get("lang") and now.hour >= 9:
+            nb_start(uid, uid)
+        return
+    nb_fill_pending(uid)
     a, b = window(uid)
     now_min = now.hour * 60 + now.minute
     if now_min < a * 60 or now_min > b * 60:
         return
+    nb = u["nb"]
     today = now.date().isoformat()
-    if st.get("day") != today:
-        st["day"], st["n"] = today, 0
-    if st["n"] >= STORY_PER_DAY:
+    if nb.get("day") != today:
+        nb["day"], nb["n"] = today, 0
+    if nb["n"] >= NB_PER_DAY:
         return
-    if st.get("last"):
+    if nb.get("last"):
         try:
-            last = datetime.fromisoformat(st["last"])
-            if (now - last).total_seconds() < STORY_GAP_MIN * 60:
+            if (now - datetime.fromisoformat(nb["last"])).total_seconds() < NB_GAP_MIN * 60:
                 return
         except Exception:
             pass
-    st["n"] += 1
+    nb["n"] += 1
+    nb["last"] = now.isoformat()
     save_course()
-    story_next(uid, uid)
+    nb_next(uid, uid)
 
 
 def send_stage(uid):
@@ -3379,6 +3604,9 @@ def on_reka_upload(message):
     global _reka_fid
     uid = message.from_user.id
     if not (message.caption or "").strip().startswith("/setreka") or not _is_admin(uid):
+        if NB_ON:
+            bot.send_message(message.chat.id, "Картинки я пока не читаю. Напиши слово или фразу текстом, и я положу её в тетрадь.",
+                             reply_markup=nb_markup())
         return
     try:
         is_photo = getattr(message, "content_type", "") == "photo"
@@ -3592,8 +3820,8 @@ def ob_markup(uid):
 
 
 def start_onboarding(uid, chat_id=None):
-    if STORY_ON:
-        story_start(uid, chat_id or uid)
+    if NB_ON:
+        nb_start(uid, chat_id or uid)
         return
     lang = user_lang(uid)
     u = U(uid)
@@ -3605,7 +3833,7 @@ def start_onboarding(uid, chat_id=None):
 def resume_onboarding(uid, chat_id):
     """Знакомство прервалось (например, бот перезапускался): показываем текущий экран, отметки сохраняются."""
     u = U(uid)
-    if STORY_ON or u["setup"] != "onb":
+    if NB_ON or u["setup"] != "onb":
         start_onboarding(uid, chat_id)
         return
     bot.send_message(chat_id, T(user_lang(uid), "ob_hi").format(kao=random.choice(KAO_HAPPY)), reply_markup=ob_markup(uid))
@@ -3955,8 +4183,8 @@ def cmd_phrase(message):
 def tick_user(uid, now):
     lang = user_lang(uid)
     u = U(uid)
-    if STORY_ON:
-        story_tick(uid, now)
+    if NB_ON:
+        nb_tick(uid, now)
         return
     today = now.date()
     now_min = now.hour * 60 + now.minute
@@ -4053,6 +4281,11 @@ def handle_all_messages(message):
     word = re.sub(r"[^\w+]", "", text.lower())
     if (text.replace("\ufe0f", "") in NEXT_BTNS or word in NEXT_WORDS) and "verb" not in data:
         go_next(user_id, message.chat.id)
+        return
+
+    # --- тетрадь: любой текст это запись
+    if NB_ON and "verb" not in data and not text.startswith("/"):
+        nb_add(user_id, message.chat.id, text)
         return
 
     # --- игра с картинками
