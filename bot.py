@@ -48,10 +48,24 @@ def _tracked_message_handler(*a, **kw):
                 tidy_track(message.chat.id, message.message_id, "user")
             except Exception:
                 pass
+            if _nb_redirect(message):
+                return
             return f(message, *x, **y)
         deco(g)
         return f
     return outer
+
+
+def _nb_redirect(message):
+    """В тетради старые команды курса (/today, /test, /drill...) просто открывают тетрадь."""
+    try:
+        t = (message.text or "").strip()
+        if NB_ON and t.startswith("/") and t.split()[0].split("@")[0] not in ("/start", "/tetrad", "/notebook", "/setreka"):
+            nb_next(message.from_user.id, message.chat.id)
+            return True
+    except Exception as e:
+        print(f"Перехват команды: {e}")
+    return False
 
 
 bot.message_handler = _tracked_message_handler
@@ -1639,6 +1653,10 @@ def cmd_start(message):
 
     current_lang = active_trainings.get(user_id, {}).get("lang")
 
+    if NB_ON and current_lang in LANGUAGES:
+        new_state(user_id, current_lang)
+        nb_start(user_id, message.chat.id)
+        return
     if current_lang in LANGUAGES:
         new_state(user_id, current_lang)
         if U(user_id)["setup"] == "ready":
@@ -2895,6 +2913,9 @@ def _send_screen(chat_id, text, kw):
     u = U(chat_id)
     if u["setup"] != "ready" or not u["cycle"]:
         return None
+    if NB_ON and not NB_IMAGE:
+        _photo_override.pop(chat_id, None)
+        return None
     ov = _photo_override.pop(chat_id, None)            # картинка мема вместо картинки Réka
     data = ov[1] if ov else reka_data()
     if not data:
@@ -3097,18 +3118,30 @@ for _p in CORE_RAW.replace("\n", ";").split(";"):
         CORE[_h.strip().lower()] = _r.strip()
 CORE_LIST = sorted(CORE)
 
-NB_TOPICS = ["Еда и напитки", "Дом и быт", "Транспорт и места", "Работа и деньги", "Люди и семья", "Чувства", "Сленг",
-             "Музыка и фильмы", "Время и числа", "Разное"]
+FOLDERS = ["Глаголы", "Существительные", "Прилагательные и наречия", "Служебные слова", "Фразы и выражения", "Сленг",
+           "Места", "Музыка и фильмы", "Числа и время", "Разное"]
+POS_FOLDER = {"verb": "Глаголы", "noun": "Существительные", "adj": "Прилагательные и наречия", "adv": "Прилагательные и наречия",
+              "function": "Служебные слова", "phrase": "Фразы и выражения", "slang": "Сленг", "place": "Места",
+              "song": "Музыка и фильмы", "number": "Числа и время", "other": "Разное"}
+OLD_TOPIC = {"Прилагательные": "Прилагательные и наречия"}
+DEFAULT_LANG = "Венгерский"
+NB_IMAGE = os.getenv("NB_IMAGE", "") == "1"          # картинка Réka над записью: по умолчанию выключена
 
 NB_PROMPT = (
-    "Ты словарь венгерского для русскоговорящего. Пользователь прислал слово, фразу, название места или песни "
-    "(по-венгерски или по-русски). Верни ТОЛЬКО JSON без пояснений: "
-    '{"type":"word|phrase|slang|place|song|other","hu":"венгерский вариант","ru":"перевод на русский",'
-    '"note":"коротко по-русски: как используется, регистр, важная форма (до 110 символов)",'
-    '"topic":"одна из: ' + "; ".join(NB_TOPICS) + '",'
-    '"lemmas":["словарные формы венгерских слов из hu, до 8"]}. '
-    "Если пришло по-русски, дай венгерский перевод в hu. Если это не слово и не фраза, верни type other, hu и ru пустые. "
-    "Не выдумывай: если не уверен в слове, так и скажи в note."
+    "Ты словарь-помощник для русскоговорящего, который учит языки. Он прислал слово, фразу, название места, песни или фильма. "
+    "Правила языка: если текст на русском, переведи его на венгерский (lang = Венгерский). Если текст на другом языке "
+    "(венгерский, английский, испанский, немецкий и любой другой), оставь его на этом языке, исправив явные опечатки, "
+    "и переведи на русский; lang = название этого языка по-русски с большой буквы (Английский, Испанский...). "
+    "Верни ТОЛЬКО JSON без пояснений: "
+    '{"lang":"язык слова","pos":"verb|noun|adj|adv|function|phrase|slang|place|song|number|other",'
+    '"word":"слово или фраза на изучаемом языке","ru":"перевод на русский",'
+    '"note":"коротко по-русски (до 110 символов): форма, употребление, нюанс"}. '
+    "pos: verb глагол; noun существительное; adj прилагательное; adv наречие; function местоимение, союз, предлог, частица "
+    "(например míg, de, is, csak); phrase фраза из двух слов и больше или устойчивое выражение; slang сленг; "
+    "place заведение, улица, город; song песня, исполнитель или фильм; number число или часть времени; other остальное. "
+    "Для глагола в word ставь словарную форму (венгерский: инфинитив на -ni, например futni; английский: to run не нужно, просто run), "
+    "а форму из запроса объясни в note. "
+    "Не выдумывай: если не уверен, так и скажи в note. Если это не слово и не фраза, верни pos other, word и ru пустые."
 )
 
 
@@ -3120,12 +3153,16 @@ def _md(s):
     return escape_markdown_v2(s)
 
 
-def _meme_photo(mid):
-    if not MEMES:
-        return None
-    m = next((x for x in MEMES if x["id"] == mid), None)
-    img = meme_image(m) if m else None
-    return (mid, img) if img else None
+def _plain(md):
+    return re.sub(r"\\(.)", r"\1", md.replace("||", ""))
+
+
+def nb_folder(e):
+    return POS_FOLDER.get(e.get("pos")) or (e.get("topic") if e.get("topic") in FOLDERS else OLD_TOPIC.get(e.get("topic"))) or "Разное"
+
+
+def nb_lang(e):
+    return e.get("lang") or DEFAULT_LANG
 
 
 def nb_sweep(chat_id, upto_mid):
@@ -3135,12 +3172,15 @@ def nb_sweep(chat_id, upto_mid):
         if nb.get("swept") or not upto_mid:
             return
         nb["swept"] = True
+        keep = {e[0] for e in U(chat_id)["trail"]}
         save_course()
     except Exception:
         return
 
     def run():
         for mid in range(upto_mid - 1, max(0, upto_mid - 250), -1):
+            if mid in keep:
+                continue
             try:
                 bot.delete_message(chat_id, mid)
             except Exception:
@@ -3149,15 +3189,18 @@ def nb_sweep(chat_id, upto_mid):
     threading.Thread(target=run, daemon=True).start()
 
 
-def nb_show(chat_id, text, kb=None):
-    """Единственное сообщение в чате: правим его на месте, новое шлём только если править нечего."""
+def nb_show(chat_id, body, kb=None):
+    """Единственное сообщение в чате: правим его на месте, новое шлём только если править нечего. body в MarkdownV2."""
     u = U(chat_id)
-    screens = [e for e in u["trail"] if e[2] == "screen"]
-    if screens:
-        mid = screens[-1][0]
+    full = body if NB_IMAGE else _md(nb_header(chat_id)) + "\n\n" + body
+    mine = [e for e in u["trail"] if e[2] not in ("user", "voice")]
+    if mine and mine[-1][2] == "screen" and not NB_IMAGE:
+        mine = []                                   # старое сообщение с картинкой: заменяем текстовым, а не правим
+    if mine:
+        mid = mine[-1][0]
         try:
             try:
-                bot.edit_message_text(text, chat_id, mid, reply_markup=kb)
+                bot.edit_message_text(full, chat_id, mid, parse_mode="MarkdownV2", reply_markup=kb)
             except Exception as e:
                 if "not modified" not in str(e):
                     raise
@@ -3169,7 +3212,11 @@ def nb_show(chat_id, text, kb=None):
             return
         except Exception as e:
             print(f"Не удалось поправить сообщение, шлю новое: {e}")
-    bot.send_message(chat_id, text, reply_markup=kb)
+    try:
+        bot.send_message(chat_id, full, parse_mode="MarkdownV2", reply_markup=kb)
+    except Exception as e:
+        print(f"MarkdownV2 не принят, шлю простым текстом: {e}")
+        bot.send_message(chat_id, _plain(full), reply_markup=kb)
 
 
 def nb_user(uid):
@@ -3182,14 +3229,24 @@ def nb_user(uid):
                       "review": False, "repeat": False, "closed": False, "n": 1}
         changed = True
     if not u.get("nb"):
-        u["nb"] = {"items": [], "found": [], "next_id": 1, "last": None, "day": None, "n": 0, "seen": [], "pos": 0}
+        u["nb"] = {"items": [], "next_id": 1, "swept": False, "langs": []}
         changed = True
+    nb = u["nb"]
+    nb.setdefault("langs", [])
+    for e in nb["items"]:
+        if nb_lang(e) not in nb["langs"]:
+            nb["langs"].append(nb_lang(e))
+            changed = True
     u["tidy"] = True
     if u.get("next_btn"):
         u["next_btn"], changed = False, True       # кнопки «Дальше» в тетради нет
     if changed:
         save_course()
-    return u["nb"]
+    return nb
+
+
+NB_MODELS = list(GROQ_MODELS)
+_nb_err = {"msg": ""}
 
 
 def nb_parse(raw):
@@ -3202,15 +3259,17 @@ def nb_parse(raw):
         return None
     if not isinstance(d, dict):
         return None
-    out = {k: str(d.get(k) or "").strip() for k in ("type", "hu", "ru", "note", "topic")}
-    out["lemmas"] = [str(x) for x in (d.get("lemmas") or []) if isinstance(x, (str, int))][:8]
-    if out["topic"] not in NB_TOPICS:
-        out["topic"] = "Разное"
+    out = {k: str(d.get(k) or "").strip() for k in ("lang", "pos", "ru", "note")}
+    out["hu"] = str(d.get("word") or d.get("hu") or "").strip()
+    if out["pos"] not in POS_FOLDER:
+        out["pos"] = "other"
+    out["lang"] = out["lang"].capitalize() if out["lang"] else DEFAULT_LANG
+    toks = re.findall(r"\w+", out["hu"])
+    if len(toks) >= 2 and out["pos"] in ("verb", "noun", "adj", "adv", "function", "other"):
+        out["pos"] = "phrase"
+    elif len(toks) == 1 and out["lang"] == DEFAULT_LANG and toks[0].lower().endswith("ni") and len(toks[0]) > 4 and out["pos"] in ("other", "phrase"):
+        out["pos"] = "verb"
     return out
-
-
-NB_MODELS = list(GROQ_MODELS)
-_nb_err = {"msg": ""}
 
 
 def nb_analyze(text):
@@ -3220,8 +3279,7 @@ def nb_analyze(text):
         return None
     msgs = [{"role": "system", "content": NB_PROMPT}, {"role": "user", "content": text[:300]}]
     for model in NB_MODELS:
-        variants = [{"response_format": {"type": "json_object"}}, {}]
-        for kw in variants:
+        for kw in ({"response_format": {"type": "json_object"}}, {}):
             kw = dict(kw)
             if model.startswith("openai/gpt-oss"):
                 kw["extra_body"] = {"reasoning_effort": "low"}
@@ -3242,30 +3300,32 @@ def nb_fallback(text):
     """Без ИИ: слово из ходового списка разбираем сами."""
     w = _nb_norm(text)
     if w in CORE:
-        return {"type": "word", "hu": text.strip(), "ru": CORE[w], "note": "", "topic": "Разное", "lemmas": [w]}
+        return {"lang": DEFAULT_LANG, "pos": "other", "hu": text.strip(), "ru": CORE[w], "note": ""}
     return None
 
 
 def nb_add_one(uid, text):
-    """Возвращает (запись, пустое множество)."""
+    """Возвращает запись (при повторе помечена dup) или None."""
     nb = nb_user(uid)
     text = text.strip()
     d = nb_analyze(text) or nb_fallback(text)
     if d and d.get("hu"):
         for old in nb["items"]:
-            if _nb_norm(old["hu"]) == _nb_norm(d["hu"]):
-                return dict(old, dup=True), set()
+            if _nb_norm(old["hu"]) == _nb_norm(d["hu"]) and nb_lang(old) == d["lang"]:
+                return dict(old, dup=True)
     pending = d is None
     if d is None:
-        d = {"type": "word", "hu": text, "ru": "", "note": "", "topic": "Разное", "lemmas": []}
-    if d["type"] == "other" and not d["hu"]:
-        return None, set()
-    e = {"id": nb["next_id"], "hu": d["hu"] or text, "ru": d["ru"], "note": d["note"], "type": d["type"],
-         "topic": d["topic"], "lemmas": d["lemmas"], "pending": pending, "src": text, "ts": budapest_now().isoformat()}
+        d = {"lang": DEFAULT_LANG, "pos": "other", "hu": text, "ru": "", "note": ""}
+    if d["pos"] == "other" and not d["hu"]:
+        return None
+    e = {"id": nb["next_id"], "lang": d["lang"], "pos": d["pos"], "hu": d["hu"] or text, "ru": d["ru"], "note": d["note"],
+         "pending": pending, "v": 3, "tries": 0, "src": text, "ts": budapest_now().isoformat()}
     nb["next_id"] += 1
     nb["items"].append(e)
+    if e["lang"] not in nb["langs"]:
+        nb["langs"].append(e["lang"])
     save_course()
-    return e, set()
+    return e
 
 
 def nb_header(uid):
@@ -3281,15 +3341,18 @@ def nb_markup(entry_id=None):
     return kb
 
 
-def nb_card(e, new):
-    lines = ["📝 Уже есть в тетради" if e.get("dup") else "📝 Записала", "", e["hu"]]
+def nb_line(e):
+    return f"• {_md(e['hu'])} — " + (f"||{_md(e['ru'])}||" if e["ru"] else "…")
+
+
+def nb_card(e):
+    lines = [_md(("📝 Уже есть в тетради" if e.get("dup") else "📝 Записала") + f" · {nb_lang(e)} · {nb_folder(e)}"), "", _md(e["hu"])]
     if e["ru"]:
-        lines.append(e["ru"])
+        lines.append(f"||{_md(e['ru'])}||")
     else:
-        lines.append("⚠️ Перевести не вышло: " + (_nb_err["msg"] or "ИИ не ответил") + "\nЗапись сохранена, попробую ещё раз.")
+        lines.append(_md("⚠️ Перевести не вышло: " + (_nb_err["msg"] or "ИИ не ответил") + ". Запись сохранена, попробую ещё раз."))
     if e["note"]:
-        lines += ["", "💡 " + e["note"]]
-    lines += ["", f"📁 {e['topic']}"]
+        lines += ["", "💡 ||" + _md(e["note"]) + "||"]
     return "\n".join(lines)
 
 
@@ -3298,64 +3361,84 @@ def nb_add(uid, chat_id, text, mid=None):
     nb_sweep(chat_id, mid)
     nb_fill_pending(uid, 2)
     parts = [p.strip() for p in re.split(r"[\n]+", text) if p.strip()][:8]
-    done, allnew = [], set()
-    for p in parts:
-        e, new = nb_add_one(uid, p)
-        if e:
-            done.append(e)
-            allnew |= new
+    done = [e for e in (nb_add_one(uid, p) for p in parts) if e]
     if not done:
-        nb_show(chat_id, "Не поняла, что тут сохранить. Пришли слово, фразу, место или песню, по-венгерски или по-русски.",
-                nb_markup())
+        nb_show(chat_id, _md("Не поняла, что тут сохранить. Пришли слово, фразу, место или песню, на любом языке."), nb_markup())
         return
     if len(done) == 1:
-        nb_show(chat_id, nb_card(done[0], allnew), nb_markup(done[0]["id"]))
+        nb_show(chat_id, nb_card(done[0]), nb_markup(done[0]["id"]))
         return
-    lines = [f"📝 Записала {len(done)}:"] + [f"• {e['hu']} — {e['ru'] or '…'}" for e in done]
+    lines = [_md(f"📝 Записала {len(done)}:")] + [nb_line(e) for e in done]
     nb_show(chat_id, "\n".join(lines), nb_markup())
 
 
-def nb_folders_view(uid):
+def nb_home_view(uid):
     nb = nb_user(uid)
+    langs = [l for l in nb["langs"] if any(nb_lang(e) == l for e in nb["items"])]
+    if not nb["items"]:
+        return _md("📚 Тетрадь пока пустая. Напиши мне любое слово, фразу, место или песню на любом языке, и я положу её на нужную полку."), InlineKeyboardMarkup()
+    if len(langs) == 1:
+        return nb_lang_view(uid, nb["langs"].index(langs[0]), single=True)
+    kb = InlineKeyboardMarkup()
+    for l in langs:
+        n = len([e for e in nb["items"] if nb_lang(e) == l])
+        kb.row(InlineKeyboardButton(f"🌍 {l} · {n}", callback_data=f"nb:l:{nb['langs'].index(l)}"))
+    return _md("📚 Твоя тетрадь. Выбери язык."), kb
+
+
+def nb_lang_view(uid, li, single=False):
+    nb = nb_user(uid)
+    lang = nb["langs"][li] if 0 <= li < len(nb["langs"]) else DEFAULT_LANG
     cnt = {}
     for e in nb["items"]:
-        cnt[e["topic"]] = cnt.get(e["topic"], 0) + 1
+        if nb_lang(e) == lang:
+            cnt[nb_folder(e)] = cnt.get(nb_folder(e), 0) + 1
     kb = InlineKeyboardMarkup()
     row = []
-    for i, t in enumerate(NB_TOPICS):
-        if cnt.get(t):
-            row.append(InlineKeyboardButton(f"{t} · {cnt[t]}", callback_data=f"nb:t:{i}:0"))
+    for fi, f in enumerate(FOLDERS):
+        if cnt.get(f):
+            row.append(InlineKeyboardButton(f"{f} · {cnt[f]}", callback_data=f"nb:t:{li}:{fi}:0"))
             if len(row) == 2:
                 kb.row(*row)
                 row = []
     if row:
         kb.row(*row)
-    text = "📚 Твоя тетрадь по полкам. Пиши мне любое слово или фразу, и я положу её на нужную полку." if nb["items"] else \
-        "📚 Тетрадь пока пустая. Напиши мне любое слово, фразу, место или песню, которые встретил, по-венгерски или по-русски."
-    return text, kb
+    if not single:
+        kb.row(InlineKeyboardButton("⬅️ Языки", callback_data="nb:f"))
+    head = f"📚 {lang}. Пиши любое слово или фразу, я положу на нужную полку." if single else f"🌍 {lang}"
+    return _md(head), kb
 
 
 PAGE = 8
 
 
-def nb_topic_view(uid, ti, page):
+def nb_topic_view(uid, li, fi, page, delete=False):
     nb = nb_user(uid)
-    t = NB_TOPICS[ti]
-    items = [e for e in nb["items"] if e["topic"] == t]
+    lang = nb["langs"][li] if 0 <= li < len(nb["langs"]) else DEFAULT_LANG
+    f = FOLDERS[fi] if 0 <= fi < len(FOLDERS) else "Разное"
+    items = [e for e in nb["items"] if nb_lang(e) == lang and nb_folder(e) == f]
     pages = max(1, math.ceil(len(items) / PAGE))
     page = min(max(page, 0), pages - 1)
     chunk = items[page * PAGE:(page + 1) * PAGE]
-    lines = [f"📁 {t} ({len(items)})", ""] + [f"• {e['hu']} — {e['ru'] or '…'}" for e in chunk]
+    title = f"📁 {f} · {lang} ({len(items)})" + ("\nНажми на слово, чтобы удалить." if delete else "")
+    lines = [_md(title), ""] + [nb_line(e) for e in chunk]
     kb = InlineKeyboardMarkup()
+    if delete:
+        for e in chunk:
+            kb.row(InlineKeyboardButton(f"🗑 {e['hu']}"[:60], callback_data=f"nb:y:{e['id']}:{li}:{fi}:{page}"))
+        kb.row(InlineKeyboardButton("✅ Готово", callback_data=f"nb:t:{li}:{fi}:{page}"))
+        return "\n".join(lines)[:3500], kb
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton("◀️", callback_data=f"nb:t:{ti}:{page - 1}"))
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"nb:t:{li}:{fi}:{page - 1}"))
     if page < pages - 1:
-        nav.append(InlineKeyboardButton("▶️", callback_data=f"nb:t:{ti}:{page + 1}"))
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"nb:t:{li}:{fi}:{page + 1}"))
     if nav:
         kb.row(*nav)
-    kb.row(InlineKeyboardButton("📚 Полки", callback_data="nb:f"))
-    return "\n".join(lines)[:1000], kb
+    if chunk:
+        kb.row(InlineKeyboardButton("🗑 Удалить слова", callback_data=f"nb:z:{li}:{fi}:{page}"))
+    kb.row(InlineKeyboardButton("📚 Назад", callback_data=f"nb:l:{li}" if len(nb["langs"]) > 1 else "nb:f"))
+    return "\n".join(lines)[:3500], kb
 
 
 @bot.message_handler(commands=["tetrad", "notebook"])
@@ -3364,25 +3447,25 @@ def cmd_tetrad(message):
     all_users.add(uid)
     nb_user(uid)
     nb_sweep(message.chat.id, message.message_id)
-    text, kb = nb_folders_view(uid)
+    text, kb = nb_home_view(uid)
     nb_show(message.chat.id, text, kb)
 
 
 def nb_start(uid, chat_id):
     nb = nb_user(uid)
     if nb["items"]:
-        text, kb = nb_folders_view(uid)
+        text, kb = nb_home_view(uid)
         nb_show(chat_id, text, kb)
         return
-    _prefix[chat_id] = ("Привет! Это Réka. Я твоя умная тетрадь для венгерского. Пиши мне любое слово, фразу, место или песню, "
-                        "которые встретил: по-венгерски или по-русски. Я переведу и положу на нужную полку. "
-                        "Ничего учить и сдавать не надо.")
-    text, kb = nb_folders_view(uid)
-    nb_show(chat_id, text, kb)
+    _prefix[chat_id] = ("Привет! Это Réka. Я твоя умная тетрадь для языков. Пиши мне любое слово, фразу, место или песню, "
+                        "которые встретил: на венгерском, английском, испанском, по-русски, как угодно. Я переведу и положу на нужную "
+                        "полку. Ничего учить и сдавать не надо.")
+    text, kb = nb_home_view(uid)
+    bot.send_message(chat_id, text, parse_mode="MarkdownV2", reply_markup=kb)
 
 
 def nb_next(uid, chat_id):
-    text, kb = nb_folders_view(uid)
+    text, kb = nb_home_view(uid)
     nb_show(chat_id, text, kb)
 
 
@@ -3394,45 +3477,58 @@ def on_nb(call):
         bot.answer_callback_query(call.id)
     except Exception:
         pass
-    parts = call.data.split(":")
+    p = call.data.split(":")
     try:
-        nb_user(uid)
+        nb = nb_user(uid)
         nb_sweep(chat, call.message.message_id)
-        act = parts[1]
+        act = p[1]
         if act == "f":
-            text, kb = nb_folders_view(uid)
-            nb_show(chat, text, kb)
-        elif act == "t":
-            text, kb = nb_topic_view(uid, int(parts[2]), int(parts[3]))
-            nb_show(chat, text, kb)
-        elif act == "d":
-            nb = nb_user(uid)
-            eid = int(parts[2])
+            text, kb = nb_home_view(uid)
+        elif act == "l":
+            text, kb = nb_lang_view(uid, int(p[2]))
+        elif act in ("t", "z"):
+            text, kb = nb_topic_view(uid, int(p[2]), int(p[3]), int(p[4]), delete=(act == "z"))
+        elif act == "y":
+            eid, li, fi, page = map(int, p[2:6])
             nb["items"] = [e for e in nb["items"] if e["id"] != eid]
             save_course()
-            text, kb = nb_folders_view(uid)
-            nb_show(chat, "🗑 Удалила.\n\n" + text, kb)
+            if any(nb_lang(e) == nb["langs"][li] and nb_folder(e) == FOLDERS[fi] for e in nb["items"]):
+                text, kb = nb_topic_view(uid, li, fi, page, delete=True)
+            else:
+                text, kb = nb_home_view(uid)
+        elif act == "d":
+            nb["items"] = [e for e in nb["items"] if e["id"] != int(p[2])]
+            save_course()
+            text, kb = nb_home_view(uid)
+            text = _md("🗑 Удалила.") + "\n\n" + text
+        else:
+            return
+        nb_show(chat, text, kb)
     except Exception as e:
         print(f"Ошибка тетради: {e}")
 
 
 def nb_fill_pending(uid, limit=3):
+    """Дозаполняем непереведённое и раскладываем по новым полкам записи, сделанные раньше."""
     nb = U(uid).get("nb")
     if not nb or not client:
         return
     n = 0
     for e in nb["items"]:
-        if e.get("pending") and n < limit:
-            d = nb_analyze(e["src"])
+        if (e.get("pending") or e.get("v") != 3) and e.get("tries", 0) < 3 and n < limit and e.get("src") != "meme":
             n += 1
+            e["tries"] = e.get("tries", 0) + 1
+            d = nb_analyze(e.get("src") or e["hu"])
             if d and d["hu"]:
-                e.update(hu=d["hu"], ru=d["ru"], note=d["note"], topic=d["topic"], lemmas=d["lemmas"], pending=False)
+                e.update(lang=d["lang"], pos=d["pos"], hu=d["hu"], ru=d["ru"], note=d["note"], pending=False, v=3)
+                if d["lang"] not in nb["langs"]:
+                    nb["langs"].append(d["lang"])
     if n:
         save_course()
 
 
 def nb_tick(uid, now):
-    """Сама ничего не шлёт: только дозаполняет переводы, которые не удались."""
+    """Сама ничего не шлёт: только дозаполняет и раскладывает записи."""
     if U(uid).get("nb"):
         nb_fill_pending(uid)
 
@@ -4205,8 +4301,11 @@ def handle_all_messages(message):
         return
 
     # --- тетрадь: любой текст это запись
-    if NB_ON and "verb" not in data and not text.startswith("/"):
-        nb_add(user_id, message.chat.id, text, message.message_id)
+    if NB_ON and "verb" not in data:
+        if text.startswith("/"):
+            nb_next(user_id, message.chat.id)          # любая старая команда ведёт в тетрадь
+        else:
+            nb_add(user_id, message.chat.id, text, message.message_id)
         return
 
     # --- игра с картинками
@@ -4287,7 +4386,10 @@ def handle_all_messages(message):
 
 try:   # меню команд (кнопка «/» рядом с полем ввода)
     from telebot.types import BotCommand
-    bot.set_my_commands([
+    if NB_ON:
+        bot.set_my_commands([BotCommand("tetrad", "📚 Тетрадь")])
+    else:
+      bot.set_my_commands([
         BotCommand("today", "Глаголы дня"),
         BotCommand("test", "Тест недели"),
         BotCommand("settings", "Темп и время"),
