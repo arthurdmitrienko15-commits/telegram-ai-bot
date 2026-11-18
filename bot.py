@@ -59,7 +59,7 @@ bot.message_handler = _tracked_message_handler
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY) if (Groq and GROQ_API_KEY) else None
 # llama3-8b-8192 закрыт в Groq, поэтому пробуем актуальные модели по очереди
-GROQ_MODELS = ["llama-3.1-8b-instant", "llama-3.3-70b-versatile"]
+GROQ_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b"]
 
 BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
 
@@ -2747,7 +2747,7 @@ def _send_message(chat_id, text=None, *a, **kw):
     kind = "card"
     if tidy and isinstance(text, str) and not a and _ready(chat_id):
         _clear_old_keyboard(chat_id)
-        if pre and _passive(kw.get("reply_markup")):
+        if pre and not NB_ON and _passive(kw.get("reply_markup")):
             foot = T(user_lang(chat_id), "foot_next")
             text = text + "\n\n" + (escape_markdown_v2(foot) if kw.get("parse_mode") == "MarkdownV2" else foot)
         kw["reply_markup"] = _with_next(chat_id, kw.get("reply_markup"))
@@ -3149,6 +3149,29 @@ def nb_sweep(chat_id, upto_mid):
     threading.Thread(target=run, daemon=True).start()
 
 
+def nb_show(chat_id, text, kb=None):
+    """Единственное сообщение в чате: правим его на месте, новое шлём только если править нечего."""
+    u = U(chat_id)
+    screens = [e for e in u["trail"] if e[2] == "screen"]
+    if screens:
+        mid = screens[-1][0]
+        try:
+            try:
+                bot.edit_message_text(text, chat_id, mid, reply_markup=kb)
+            except Exception as e:
+                if "not modified" not in str(e):
+                    raise
+            _prefix.pop(chat_id, None)
+            others = [e[0] for e in u["trail"] if e[0] != mid]
+            u["trail"] = [e for e in u["trail"] if e[0] == mid]
+            _tidy_delete(chat_id, others)
+            save_course()
+            return
+        except Exception as e:
+            print(f"Не удалось поправить сообщение, шлю новое: {e}")
+    bot.send_message(chat_id, text, reply_markup=kb)
+
+
 def nb_user(uid):
     u = U(uid)
     changed = False
@@ -3186,7 +3209,7 @@ def nb_parse(raw):
     return out
 
 
-NB_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+NB_MODELS = list(GROQ_MODELS)
 _nb_err = {"msg": ""}
 
 
@@ -3195,13 +3218,15 @@ def nb_analyze(text):
     if not client:
         _nb_err["msg"] = "боту не передан ключ GROQ_API_KEY (или не установлена библиотека groq)"
         return None
+    msgs = [{"role": "system", "content": NB_PROMPT}, {"role": "user", "content": text[:300]}]
     for model in NB_MODELS:
-        for fmt in ({"type": "json_object"}, None):
+        variants = [{"response_format": {"type": "json_object"}}, {}]
+        for kw in variants:
+            kw = dict(kw)
+            if model.startswith("openai/gpt-oss"):
+                kw["extra_body"] = {"reasoning_effort": "low"}
             try:
-                kw = {"response_format": fmt} if fmt else {}
-                done = client.chat.completions.create(
-                    model=model, temperature=0.2, max_tokens=300,
-                    messages=[{"role": "system", "content": NB_PROMPT}, {"role": "user", "content": text[:300]}], **kw)
+                done = client.chat.completions.create(model=model, temperature=0.2, max_tokens=1500, messages=msgs, **kw)
                 d = nb_parse(done.choices[0].message.content)
                 if d is not None:
                     _nb_err["msg"] = ""
@@ -3280,14 +3305,14 @@ def nb_add(uid, chat_id, text, mid=None):
             done.append(e)
             allnew |= new
     if not done:
-        bot.send_message(chat_id, "Не поняла, что тут сохранить. Пришли слово, фразу, место или песню, по-венгерски или по-русски.",
-                         reply_markup=nb_markup())
+        nb_show(chat_id, "Не поняла, что тут сохранить. Пришли слово, фразу, место или песню, по-венгерски или по-русски.",
+                nb_markup())
         return
     if len(done) == 1:
-        bot.send_message(chat_id, nb_card(done[0], allnew), reply_markup=nb_markup(done[0]["id"]))
+        nb_show(chat_id, nb_card(done[0], allnew), nb_markup(done[0]["id"]))
         return
     lines = [f"📝 Записала {len(done)}:"] + [f"• {e['hu']} — {e['ru'] or '…'}" for e in done]
-    bot.send_message(chat_id, "\n".join(lines), reply_markup=nb_markup())
+    nb_show(chat_id, "\n".join(lines), nb_markup())
 
 
 def nb_folders_view(uid):
@@ -3340,25 +3365,25 @@ def cmd_tetrad(message):
     nb_user(uid)
     nb_sweep(message.chat.id, message.message_id)
     text, kb = nb_folders_view(uid)
-    bot.send_message(message.chat.id, text, reply_markup=kb)
+    nb_show(message.chat.id, text, kb)
 
 
 def nb_start(uid, chat_id):
     nb = nb_user(uid)
     if nb["items"]:
         text, kb = nb_folders_view(uid)
-        bot.send_message(chat_id, text, reply_markup=kb)
+        nb_show(chat_id, text, kb)
         return
     _prefix[chat_id] = ("Привет! Это Réka. Я твоя умная тетрадь для венгерского. Пиши мне любое слово, фразу, место или песню, "
                         "которые встретил: по-венгерски или по-русски. Я переведу и положу на нужную полку. "
                         "Ничего учить и сдавать не надо.")
     text, kb = nb_folders_view(uid)
-    bot.send_message(chat_id, text, reply_markup=kb)
+    nb_show(chat_id, text, kb)
 
 
 def nb_next(uid, chat_id):
     text, kb = nb_folders_view(uid)
-    bot.send_message(chat_id, text, reply_markup=kb)
+    nb_show(chat_id, text, kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("nb:"))
@@ -3376,17 +3401,17 @@ def on_nb(call):
         act = parts[1]
         if act == "f":
             text, kb = nb_folders_view(uid)
-            bot.send_message(chat, text, reply_markup=kb)
+            nb_show(chat, text, kb)
         elif act == "t":
             text, kb = nb_topic_view(uid, int(parts[2]), int(parts[3]))
-            bot.send_message(chat, text, reply_markup=kb)
+            nb_show(chat, text, kb)
         elif act == "d":
             nb = nb_user(uid)
             eid = int(parts[2])
             nb["items"] = [e for e in nb["items"] if e["id"] != eid]
             save_course()
             text, kb = nb_folders_view(uid)
-            bot.send_message(chat, "🗑 Удалила.\n\n" + text, reply_markup=kb)
+            nb_show(chat, "🗑 Удалила.\n\n" + text, kb)
     except Exception as e:
         print(f"Ошибка тетради: {e}")
 
