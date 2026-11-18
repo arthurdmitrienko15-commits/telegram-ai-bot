@@ -3097,7 +3097,7 @@ for _p in CORE_RAW.replace("\n", ";").split(";"):
         CORE[_h.strip().lower()] = _r.strip()
 CORE_LIST = sorted(CORE)
 
-NB_TOPICS = ["Еда и напитки", "Дом и быт", "Транспорт и места", "Работа и деньги", "Люди и семья", "Чувства", "Сленг и мемы",
+NB_TOPICS = ["Еда и напитки", "Дом и быт", "Транспорт и места", "Работа и деньги", "Люди и семья", "Чувства", "Сленг",
              "Музыка и фильмы", "Время и числа", "Разное"]
 
 NB_PROMPT = (
@@ -3128,6 +3128,27 @@ def _meme_photo(mid):
     return (mid, img) if img else None
 
 
+def nb_sweep(chat_id, upto_mid):
+    """Один раз стираем хвост старых сообщений прошлых версий (Telegram даёт удалять то, что моложе двух суток)."""
+    try:
+        nb = U(chat_id)["nb"]
+        if nb.get("swept") or not upto_mid:
+            return
+        nb["swept"] = True
+        save_course()
+    except Exception:
+        return
+
+    def run():
+        for mid in range(upto_mid - 1, max(0, upto_mid - 250), -1):
+            try:
+                bot.delete_message(chat_id, mid)
+            except Exception:
+                pass
+            time.sleep(0.04)
+    threading.Thread(target=run, daemon=True).start()
+
+
 def nb_user(uid):
     u = U(uid)
     changed = False
@@ -3141,6 +3162,8 @@ def nb_user(uid):
         u["nb"] = {"items": [], "found": [], "next_id": 1, "last": None, "day": None, "n": 0, "seen": [], "pos": 0}
         changed = True
     u["tidy"] = True
+    if u.get("next_btn"):
+        u["next_btn"], changed = False, True       # кнопки «Дальше» в тетради нет
     if changed:
         save_course()
     return u["nb"]
@@ -3207,6 +3230,10 @@ def nb_add_one(uid, text):
     nb = nb_user(uid)
     text = text.strip()
     d = nb_analyze(text) or nb_fallback(text)
+    if d and d.get("hu"):
+        for old in nb["items"]:
+            if _nb_norm(old["hu"]) == _nb_norm(d["hu"]):
+                return dict(old, dup=True), set()
     pending = d is None
     if d is None:
         d = {"type": "word", "hu": text, "ru": "", "note": "", "topic": "Разное", "lemmas": []}
@@ -3236,14 +3263,12 @@ def nb_markup(entry_id=None):
     row.append(InlineKeyboardButton("🎴 Покедекс", callback_data="nb:p"))
     kb.row(*row)
     if entry_id:
-        kb.row(InlineKeyboardButton("😄 Мем", callback_data="nb:m"), InlineKeyboardButton("🗑 Удалить", callback_data=f"nb:d:{entry_id}"))
-    else:
-        kb.row(InlineKeyboardButton("😄 Мем", callback_data="nb:m"))
+        kb.row(InlineKeyboardButton("🗑 Удалить", callback_data=f"nb:d:{entry_id}"))
     return kb
 
 
 def nb_card(e, new):
-    lines = ["📝 Записала", "", e["hu"]]
+    lines = ["📝 Уже есть в тетради" if e.get("dup") else "📝 Записала", "", e["hu"]]
     if e["ru"]:
         lines.append(e["ru"])
     else:
@@ -3256,8 +3281,9 @@ def nb_card(e, new):
     return "\n".join(lines)
 
 
-def nb_add(uid, chat_id, text):
+def nb_add(uid, chat_id, text, mid=None):
     nb_user(uid)
+    nb_sweep(chat_id, mid)
     parts = [p.strip() for p in re.split(r"[\n]+", text) if p.strip()][:8]
     done, allnew = [], set()
     for p in parts:
@@ -3341,6 +3367,7 @@ def cmd_tetrad(message):
     uid = message.from_user.id
     all_users.add(uid)
     nb_user(uid)
+    nb_sweep(message.chat.id, message.message_id)
     text, kb = nb_folders_view(uid)
     bot.send_message(message.chat.id, text, reply_markup=kb)
 
@@ -3351,62 +3378,6 @@ def cmd_pokedex(message):
     all_users.add(uid)
     text, kb = nb_pokedex_view(uid)
     bot.send_message(message.chat.id, text, reply_markup=kb)
-
-
-def nb_save_meme(uid, mid):
-    nb = nb_user(uid)
-    m = next((x for x in MEMES if x["id"] == mid), None)
-    if not m or any(e.get("meme") == mid for e in nb["items"]):
-        return None
-    e = {"id": nb["next_id"], "hu": m["hu"], "ru": m["ru"], "note": m["note"], "type": "slang", "topic": "Сленг и мемы",
-         "lemmas": [], "pending": False, "src": "meme", "meme": mid, "ts": budapest_now().isoformat()}
-    nb["next_id"] += 1
-    nb["items"].append(e)
-    new = nb_open_words(e) - nb_found(nb)
-    nb["found"] = sorted(nb_found(nb) | new)
-    save_course()
-    return e
-
-
-def nb_send_meme(uid, chat_id, auto=False):
-    nb = nb_user(uid)
-    if not MEMES:
-        bot.send_message(chat_id, "Мемов пока нет: нет файла meme_imgs.py рядом с bot.py.", reply_markup=nb_markup())
-        return
-    seen = [x for x in nb.get("seen", []) if any(m["id"] == x for m in MEMES)]
-    pool = [m for m in MEMES if m["id"] not in seen] or list(MEMES)
-    if len(pool) == len(MEMES):
-        seen = []
-    m = random.choice(pool)
-    nb["seen"] = seen + [m["id"]]
-    save_course()
-    ov = _meme_photo(m["id"])
-    if ov:
-        _photo_override[chat_id] = ov
-    kb = InlineKeyboardMarkup()
-    kb.row(InlineKeyboardButton("💾 В тетрадь", callback_data=f"nb:s:{m['id']}"), InlineKeyboardButton("😄 Ещё", callback_data="nb:m"))
-    kb.row(InlineKeyboardButton("📚 Тетрадь", callback_data="nb:f"))
-    try:
-        bot.send_message(chat_id, f"😄 {_md(m['hu'])}\n||{_md(m['ru'])}||\n\n💡 ||{_md(m['note'])}||",
-                         parse_mode="MarkdownV2", reply_markup=kb)
-    except Exception as e:
-        print(f"Ошибка мема: {e}")
-        _photo_override.pop(chat_id, None)
-        bot.send_message(chat_id, f"😄 {m['hu']}\n— {m['ru']}\n\n💡 {m['note']}", reply_markup=kb)
-
-
-def nb_send_recall(uid, chat_id):
-    nb = nb_user(uid)
-    items = [e for e in nb["items"] if e["ru"]]
-    if not items:
-        nb_send_meme(uid, chat_id)
-        return
-    e = random.choice(items)
-    body = f"💭 Ты это сохранял:\n{_md(e['hu'])}\n||{_md(e['ru'])}||"
-    try:
-        bot.send_message(chat_id, body, parse_mode="MarkdownV2", reply_markup=nb_markup())
-    except Exception:
-        bot.send_message(chat_id, f"💭 Ты это сохранял:\n{e['hu']}\n— {e['ru']}", reply_markup=nb_markup())
 
 
 def nb_start(uid, chat_id):
@@ -3423,11 +3394,8 @@ def nb_start(uid, chat_id):
 
 
 def nb_next(uid, chat_id):
-    nb = nb_user(uid)
-    if nb["items"] and random.random() < 0.6:
-        nb_send_recall(uid, chat_id)
-    else:
-        nb_send_meme(uid, chat_id)
+    text, kb = nb_folders_view(uid)
+    bot.send_message(chat_id, text, reply_markup=kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("nb:"))
@@ -3440,6 +3408,8 @@ def on_nb(call):
         pass
     parts = call.data.split(":")
     try:
+        nb_user(uid)
+        nb_sweep(chat, call.message.message_id)
         act = parts[1]
         if act == "f":
             text, kb = nb_folders_view(uid)
@@ -3450,11 +3420,6 @@ def on_nb(call):
         elif act == "t":
             text, kb = nb_topic_view(uid, int(parts[2]), int(parts[3]))
             bot.send_message(chat, text, reply_markup=kb)
-        elif act == "m":
-            nb_send_meme(uid, chat)
-        elif act == "s":
-            e = nb_save_meme(uid, int(parts[2]))
-            bot.answer_callback_query(call.id, "Сохранила в тетрадь" if e else "Уже в тетради")
         elif act == "d":
             nb = nb_user(uid)
             eid = int(parts[2])
@@ -3468,10 +3433,6 @@ def on_nb(call):
             bot.send_message(chat, "🗑 Удалила.\n\n" + text, reply_markup=kb)
     except Exception as e:
         print(f"Ошибка тетради: {e}")
-
-
-NB_GAP_MIN = 240
-NB_PER_DAY = 2
 
 
 def nb_fill_pending(uid, limit=3):
@@ -3491,32 +3452,9 @@ def nb_fill_pending(uid, limit=3):
 
 
 def nb_tick(uid, now):
-    u = U(uid)
-    if not u.get("nb"):
-        if active_trainings.get(uid, {}).get("lang") and now.hour >= 9:
-            nb_start(uid, uid)
-        return
-    nb_fill_pending(uid)
-    a, b = window(uid)
-    now_min = now.hour * 60 + now.minute
-    if now_min < a * 60 or now_min > b * 60:
-        return
-    nb = u["nb"]
-    today = now.date().isoformat()
-    if nb.get("day") != today:
-        nb["day"], nb["n"] = today, 0
-    if nb["n"] >= NB_PER_DAY:
-        return
-    if nb.get("last"):
-        try:
-            if (now - datetime.fromisoformat(nb["last"])).total_seconds() < NB_GAP_MIN * 60:
-                return
-        except Exception:
-            pass
-    nb["n"] += 1
-    nb["last"] = now.isoformat()
-    save_course()
-    nb_next(uid, uid)
+    """Сама ничего не шлёт: только дозаполняет переводы, которые не удались."""
+    if U(uid).get("nb"):
+        nb_fill_pending(uid)
 
 
 def send_stage(uid):
@@ -4169,6 +4107,9 @@ def ensure_meme(uid, day):
 def cmd_phrase(message):
     uid = message.from_user.id
     all_users.add(uid)
+    if NB_ON:
+        cmd_tetrad(message)
+        return
     if U(uid)["setup"] != "ready":
         resume_onboarding(uid, message.chat.id)
         return
@@ -4279,13 +4220,13 @@ def handle_all_messages(message):
 
     # --- кнопка «Дальше», слово «дальше» и короткое «ок»/«да»: всё это значит «продолжаем»
     word = re.sub(r"[^\w+]", "", text.lower())
-    if (text.replace("\ufe0f", "") in NEXT_BTNS or word in NEXT_WORDS) and "verb" not in data:
+    if not NB_ON and (text.replace("\ufe0f", "") in NEXT_BTNS or word in NEXT_WORDS) and "verb" not in data:
         go_next(user_id, message.chat.id)
         return
 
     # --- тетрадь: любой текст это запись
     if NB_ON and "verb" not in data and not text.startswith("/"):
-        nb_add(user_id, message.chat.id, text)
+        nb_add(user_id, message.chat.id, text, message.message_id)
         return
 
     # --- игра с картинками
