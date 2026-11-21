@@ -4640,6 +4640,18 @@ except Exception as e:
     print(f"Не удалось задать меню команд: {e}")
 
 print(f"Данные лежат в: {DATA_DIR} (пользователей в файле: {len(_store)}). Если после каждого обновления бота это число 0, нужен постоянный диск (Volume).")
+try:
+    _probe = os.path.join(DATA_DIR, ".probe")
+    with open(_probe, "w") as _f:
+        _f.write("ok")
+    print(f"Проверка записи в {DATA_DIR}: OK")
+except Exception as _e:
+    print(f"ОШИБКА: в {DATA_DIR} писать нельзя ({_e}). Задай переменную RAILWAY_RUN_UID=0 и перезапусти.")
+try:
+    print("Файлы в папке данных:", {n: os.path.getsize(os.path.join(DATA_DIR, n)) for n in os.listdir(DATA_DIR) if os.path.isfile(os.path.join(DATA_DIR, n))})
+    print("Записей в тетрадях:", sum(len((u.get("nb") or {}).get("items") or []) for u in _store.values()))
+except Exception as _e:
+    print(f"Не удалось прочитать папку данных: {_e}")
 threading.Thread(target=daily_reminders_loop, daemon=True).start()
 
 print(f"Фраз недели загружено: {len(MEMES)}" + ("" if MEMES else " (нет meme_imgs.py рядом с bot.py)"))
