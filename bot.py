@@ -3508,41 +3508,101 @@ def nb_select_view(uid, li, fi, page):
     return "\n".join(lines)[:3500], kb
 
 
+RIGHT_SAY = ["Ни хуя себе, угадал.", "Ого, мозг всё-таки работает.", "Да ты охуенен. Сам в шоке.", "Блин, правильно. Не ожидала.",
+             "Заебись. Продолжай в том же духе.", "Это было слишком легко, не расслабляйся.", "Красавчик, хуле."]
+WRONG_SAY = ["Ты ебанулся? Нет, конечно.", "Пиздец. Это даже близко не то.", "Серьёзно?! Блять, смотри правильный ответ.",
+             "Я в тебя верила. Зря.", "Мимо, как всегда. Запоминай, мудила.", "Ну охуеть, конечно. Нет.", "Даже кот бы угадал, а ты нет."]
+OPT_ICONS = ["🟦", "🟥", "🟨", "🟩"]
+
+
 def nb_test_start(uid, ids):
     nb = nb_user(uid)
     ids = list(ids)
     random.shuffle(ids)
-    nb["test"] = {"ids": ids, "i": 0, "ok": [], "bad": []}
+    nb["test"] = {"ids": ids, "all": list(ids), "i": 0, "ok": [], "bad": [], "marks": [], "streak": 0}
     save_course()
+
+
+def nb_bar(t):
+    n = len(t["ids"])
+    marks = t.get("marks") or []
+    if n <= 12:
+        return "".join(marks) + "⬜" * (n - len(marks))
+    done = round(10 * len(marks) / n)
+    return "🟩" * done + "⬜" * (10 - done)
 
 
 def nb_test_view(uid):
     nb = nb_user(uid)
     t = nb.get("test")
     byid = {e["id"]: e for e in nb["items"]}
+    fb = t.get("fb") if t else None
+    if fb:
+        fe = byid.get(fb["id"])
+        last = t["i"] >= len(t["ids"])
+        lines = [_md(nb_bar(t)), ""]
+        if fb["right"]:
+            lines.append(_md("🟩 Верно! " + fb["say"]))
+            if t.get("streak", 0) >= 3:
+                lines.append(_md(f"🔥 Серия: {t['streak']}"))
+        else:
+            lines.append(_md("🟥 Не то. " + fb["say"]))
+        if fe:
+            lines += ["", _md(f"{nb_flag(nb_lang(fe))} {fe['hu']} — {fe['ru']}")]
+            if fe.get("note"):
+                lines += ["", "💡 " + _md(fe["note"])]
+        kb = InlineKeyboardMarkup()
+        kb.row(InlineKeyboardButton("🏁 Результат" if last else "➡️ Дальше", callback_data="nb:x"))
+        return "\n".join(lines)[:3500], kb
     while t and t["i"] < len(t["ids"]) and t["ids"][t["i"]] not in byid:
         t["i"] += 1                                   # слово удалили посреди теста
     if not t or t["i"] >= len(t["ids"]):
         ok_n, bad = len(t["ok"]) if t else 0, [byid[i] for i in (t["bad"] if t else []) if i in byid]
         total = ok_n + len(bad)
-        lines = [_md(f"🧪 Готово: знал {ok_n} из {total}.")]
+        pct = (100 * ok_n // total) if total else 0
+        verdict = "Сто процентов. Не верю, ты точно не подсматривал, сука 🤨" if pct == 100 else "Нормально, хуле, не позорище 💪" if pct >= 70 else "Так себе. Пересдавай, не будь тряпкой." if pct >= 40 else "Это пиздец. Учи слова, блять, и пересдавай."
+        lines = [_md(f"🧪 Готово: {ok_n} из {total}"), _md(nb_bar(t) if t else ""), "", _md(verdict)]
         if bad:
-            lines += ["", _md("Повтори эти:")] + [nb_line(e) for e in bad]
+            lines += ["", _md("Ошибки:")] + [nb_line(e) for e in bad]
         kb = InlineKeyboardMarkup()
         if bad:
-            kb.row(InlineKeyboardButton("🔁 Повторить ошибки", callback_data="nb:r"))
+            kb.row(InlineKeyboardButton("🎯 Только ошибки", callback_data="nb:r"))
+        if t and t.get("all"):
+            kb.row(InlineKeyboardButton("🔁 Пересдать", callback_data="nb:rt"))
         kb.row(InlineKeyboardButton("📚 Тетрадь", callback_data="nb:f"))
         nb["last_bad"] = [e["id"] for e in bad]
+        nb["last_all"] = list(t["all"]) if t and t.get("all") else []
         nb["test"] = None
         save_course()
         return "\n".join(lines)[:3500], kb
     e = byid[t["ids"][t["i"]]]
     n = len(t["ids"])
-    lines = [_md(f"🧪 Тест · {t['i'] + 1} из {n}"), "", _md(f"{nb_flag(nb_lang(e))} {e['hu']}"), f"||{_md(e['ru'])}||", "",
-             _md("Вспомни перевод, потом нажми на скрытый текст и отметь, знал ли.")]
+    direction = random.choice(("hu", "ru"))            # слово → перевод или перевод → слово
+    shown, correct = (e["hu"], e["ru"]) if direction == "hu" else (e["ru"], e["hu"])
+    pool = [x for x in nb["items"] if x["id"] != e["id"] and nb_lang(x) == nb_lang(e) and x.get("ru")]
+    wrong = []
+    for x in random.sample(pool, len(pool)):
+        cand = x["ru"] if direction == "hu" else x["hu"]
+        if cand != correct and cand not in wrong:
+            wrong.append(cand)
+        if len(wrong) == 3:
+            break
     kb = InlineKeyboardMarkup()
-    kb.row(InlineKeyboardButton("✅ Знал", callback_data="nb:g:1"), InlineKeyboardButton("❌ Не знал", callback_data="nb:g:0"))
+    head = [_md(nb_bar(t)), _md(f"Вопрос {t['i'] + 1} из {n}" + (f" · 🔥 {t['streak']}" if t.get("streak", 0) >= 3 else "")), ""]
+    if len(wrong) >= 2:
+        opts = wrong + [correct]
+        random.shuffle(opts)
+        t["cur"] = {"opts": opts, "ans": opts.index(correct)}
+        lines = head + [_md(f"{nb_flag(nb_lang(e))} {shown}"), "", _md("Ну, и что это значит?" if direction == "hu" else "Как это будет на самом деле?")]
+        for k, o in enumerate(opts):
+            kb.row(InlineKeyboardButton(f"{OPT_ICONS[k % 4]} {o[:56]}", callback_data=f"nb:m:{k}"))
+    else:                                               # слов мало для вариантов: проверяем себя
+        t["cur"] = None
+        lines = head + [_md(f"{nb_flag(nb_lang(e))} {e['hu']}"), f"||{_md(e['ru'])}||", "",
+                        _md("Вспомни перевод, потом нажми на скрытый текст и отметь, знал ли.")]
+        kb.row(InlineKeyboardButton("✅ Знал", callback_data="nb:g:1"), InlineKeyboardButton("❌ Не знал", callback_data="nb:g:0"))
     kb.row(InlineKeyboardButton("⏹ Закончить", callback_data="nb:e"))
+    save_course()
     return "\n".join(lines), kb
 
 
@@ -3626,10 +3686,33 @@ def on_nb(call):
                 return
             nb_test_start(uid, ids)
             text, kb = nb_test_view(uid)
+        elif act == "m":
+            t = nb.get("test")
+            cur = t and t.get("cur")
+            if not cur or t.get("fb") or t["i"] >= len(t["ids"]):
+                return
+            right = int(p[2]) == cur["ans"]
+            eid = t["ids"][t["i"]]
+            (t["ok"] if right else t["bad"]).append(eid)
+            t["marks"].append("🟩" if right else "🟥")
+            t["streak"] = t.get("streak", 0) + 1 if right else 0
+            t["fb"] = {"id": eid, "right": right, "say": random.choice(RIGHT_SAY if right else WRONG_SAY)}
+            t["cur"] = None
+            t["i"] += 1
+            save_course()
+            text, kb = nb_test_view(uid)
+        elif act == "x":
+            t = nb.get("test")
+            if t:
+                t["fb"] = None
+                save_course()
+            text, kb = nb_test_view(uid)
         elif act == "g":
             t = nb.get("test")
             if t and t["i"] < len(t["ids"]):
                 (t["ok"] if p[2] == "1" else t["bad"]).append(t["ids"][t["i"]])
+                t["marks"].append("🟩" if p[2] == "1" else "🟥")
+                t["streak"] = t.get("streak", 0) + 1 if p[2] == "1" else 0
                 t["i"] += 1
                 save_course()
             text, kb = nb_test_view(uid)
@@ -3637,7 +3720,15 @@ def on_nb(call):
             t = nb.get("test")
             if t:
                 t["i"] = len(t["ids"])
+                t["fb"] = None
             text, kb = nb_test_view(uid)
+        elif act == "rt":
+            ids = [i for i in (nb.get("last_all") or []) if any(e["id"] == i for e in nb["items"])]
+            if not ids:
+                text, kb = nb_home_view(uid)
+            else:
+                nb_test_start(uid, ids)
+                text, kb = nb_test_view(uid)
         elif act == "r":
             ids = [i for i in (nb.get("last_bad") or []) if any(e["id"] == i for e in nb["items"])]
             if not ids:
