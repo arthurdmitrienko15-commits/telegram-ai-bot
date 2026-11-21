@@ -1947,6 +1947,7 @@ def save_course():
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(_store, f, ensure_ascii=False)
             os.replace(tmp, COURSE_FILE)
+            print(f"[save] {COURSE_FILE}: {os.path.getsize(COURSE_FILE)} байт, записей: {sum(len((u.get('nb') or {}).get('items') or []) for u in _store.values())}")
         except Exception as e:
             print(f"Не удалось сохранить course.json: {e}")
 
