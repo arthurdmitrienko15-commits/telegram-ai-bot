@@ -3125,6 +3125,19 @@ POS_FOLDER = {"verb": "Глаголы", "noun": "Существительные"
               "song": "Музыка и фильмы", "number": "Числа и время", "other": "Разное"}
 OLD_TOPIC = {"Прилагательные": "Прилагательные и наречия"}
 DEFAULT_LANG = "Венгерский"
+FLAGS = {"Венгерский": "🇭🇺", "Английский": "🇬🇧", "Испанский": "🇪🇸", "Немецкий": "🇩🇪", "Французский": "🇫🇷", "Итальянский": "🇮🇹",
+         "Португальский": "🇵🇹", "Русский": "🇷🇺", "Украинский": "🇺🇦", "Польский": "🇵🇱", "Чешский": "🇨🇿", "Словацкий": "🇸🇰",
+         "Румынский": "🇷🇴", "Сербский": "🇷🇸", "Хорватский": "🇭🇷", "Болгарский": "🇧🇬", "Греческий": "🇬🇷", "Турецкий": "🇹🇷",
+         "Арабский": "🇸🇦", "Иврит": "🇮🇱", "Японский": "🇯🇵", "Китайский": "🇨🇳", "Корейский": "🇰🇷", "Хинди": "🇮🇳",
+         "Нидерландский": "🇳🇱", "Голландский": "🇳🇱", "Шведский": "🇸🇪", "Норвежский": "🇳🇴", "Датский": "🇩🇰", "Финский": "🇫🇮",
+         "Эстонский": "🇪🇪", "Латышский": "🇱🇻", "Литовский": "🇱🇹", "Грузинский": "🇬🇪", "Армянский": "🇦🇲", "Казахский": "🇰🇿",
+         "Вьетнамский": "🇻🇳", "Тайский": "🇹🇭", "Индонезийский": "🇮🇩", "Персидский": "🇮🇷", "Албанский": "🇦🇱",
+         "Словенский": "🇸🇮", "Македонский": "🇲🇰", "Белорусский": "🇧🇾", "Азербайджанский": "🇦🇿", "Узбекский": "🇺🇿",
+         "Латинский": "🏛️", "Латынь": "🏛️"}
+
+
+def nb_flag(lang):
+    return FLAGS.get(lang, "🌍")
 NB_IMAGE = os.getenv("NB_IMAGE", "") == "1"          # картинка Réka над записью: по умолчанию выключена
 
 NB_PROMPT = (
@@ -3346,7 +3359,7 @@ def nb_line(e):
 
 
 def nb_card(e):
-    lines = [_md(("📝 Уже есть в тетради" if e.get("dup") else "📝 Записала") + f" · {nb_lang(e)} · {nb_folder(e)}"), "", _md(e["hu"])]
+    lines = [_md(("📝 Уже есть в тетради" if e.get("dup") else "📝 Записала") + f" · {nb_flag(nb_lang(e))} {nb_lang(e)} · {nb_folder(e)}"), "", _md(e["hu"])]
     if e["ru"]:
         lines.append(f"||{_md(e['ru'])}||")
     else:
@@ -3382,7 +3395,8 @@ def nb_home_view(uid):
     kb = InlineKeyboardMarkup()
     for l in langs:
         n = len([e for e in nb["items"] if nb_lang(e) == l])
-        kb.row(InlineKeyboardButton(f"🌍 {l} · {n}", callback_data=f"nb:l:{nb['langs'].index(l)}"))
+        kb.row(InlineKeyboardButton(f"{nb_flag(l)} {l} · {n}", callback_data=f"nb:l:{nb['langs'].index(l)}"))
+    kb.row(InlineKeyboardButton("🧪 Тест", callback_data="nb:s:-1:-1"))
     return _md("📚 Твоя тетрадь. Выбери язык."), kb
 
 
@@ -3403,9 +3417,10 @@ def nb_lang_view(uid, li, single=False):
                 row = []
     if row:
         kb.row(*row)
+    kb.row(InlineKeyboardButton("🧪 Тест", callback_data=f"nb:s:{li}:-1"))
     if not single:
         kb.row(InlineKeyboardButton("⬅️ Языки", callback_data="nb:f"))
-    head = f"📚 {lang}. Пиши любое слово или фразу, я положу на нужную полку." if single else f"🌍 {lang}"
+    head = f"{nb_flag(lang)} {lang}. Пиши любое слово или фразу, я положу на нужную полку." if single else f"{nb_flag(lang)} {lang}"
     return _md(head), kb
 
 
@@ -3420,7 +3435,7 @@ def nb_topic_view(uid, li, fi, page, delete=False):
     pages = max(1, math.ceil(len(items) / PAGE))
     page = min(max(page, 0), pages - 1)
     chunk = items[page * PAGE:(page + 1) * PAGE]
-    title = f"📁 {f} · {lang} ({len(items)})" + ("\nНажми на слово, чтобы удалить." if delete else "")
+    title = f"📁 {f} · {nb_flag(lang)} {lang} ({len(items)})" + ("\nНажми на слово, чтобы удалить." if delete else "")
     lines = [_md(title), ""] + [nb_line(e) for e in chunk]
     kb = InlineKeyboardMarkup()
     if delete:
@@ -3436,9 +3451,99 @@ def nb_topic_view(uid, li, fi, page, delete=False):
     if nav:
         kb.row(*nav)
     if chunk:
-        kb.row(InlineKeyboardButton("🗑 Удалить слова", callback_data=f"nb:z:{li}:{fi}:{page}"))
+        kb.row(InlineKeyboardButton("🧪 Тест", callback_data=f"nb:s:{li}:{fi}"),
+               InlineKeyboardButton("🗑 Удалить слова", callback_data=f"nb:z:{li}:{fi}:{page}"))
     kb.row(InlineKeyboardButton("📚 Назад", callback_data=f"nb:l:{li}" if len(nb["langs"]) > 1 else "nb:f"))
     return "\n".join(lines)[:3500], kb
+
+
+
+# ---------------------------------------------------------------- тест по выбранным словам
+def nb_pool(nb, li, fi):
+    """Слова, из которых можно выбирать: у которых есть перевод; в рамках языка и полки, если они заданы."""
+    lang = nb["langs"][li] if 0 <= li < len(nb["langs"]) else None
+    out = []
+    for e in nb["items"]:
+        if not e.get("ru"):
+            continue
+        if lang and nb_lang(e) != lang:
+            continue
+        if fi >= 0 and nb_folder(e) != FOLDERS[fi]:
+            continue
+        out.append(e)
+    return out
+
+
+def nb_select_view(uid, li, fi, page):
+    nb = nb_user(uid)
+    pool = nb_pool(nb, li, fi)
+    sel = set(nb.get("tsel") or [])
+    pages = max(1, math.ceil(len(pool) / PAGE))
+    page = min(max(page, 0), pages - 1)
+    chunk = pool[page * PAGE:(page + 1) * PAGE]
+    k = len(sel & {e["id"] for e in pool})
+    scope = "все слова"
+    if 0 <= li < len(nb["langs"]):
+        scope = f"{nb_flag(nb['langs'][li])} {nb['langs'][li]}" + (f" · {FOLDERS[fi]}" if fi >= 0 else "")
+    lines = [_md(f"🧪 Тест: выбери слова ({scope})"), _md(f"Выбрано: {k} из {len(pool)}. Нажимай на слова, чтобы отметить."), ""]
+    if not pool:
+        lines.append(_md("Тут пока нет слов с переводом."))
+    kb = InlineKeyboardMarkup()
+    for e in chunk:
+        mark = "☑️" if e["id"] in sel else "⬜"
+        kb.row(InlineKeyboardButton(f"{mark} {nb_flag(nb_lang(e))} {e['hu']}"[:60], callback_data=f"nb:c:{e['id']}:{li}:{fi}:{page}"))
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"nb:p:{li}:{fi}:{page - 1}"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"nb:p:{li}:{fi}:{page + 1}"))
+    if nav:
+        kb.row(*nav)
+    if pool:
+        kb.row(InlineKeyboardButton("☑️ Все", callback_data=f"nb:a:{li}:{fi}:{page}"),
+               InlineKeyboardButton("⬜ Сбросить", callback_data=f"nb:n:{li}:{fi}:{page}"))
+    if k:
+        kb.row(InlineKeyboardButton(f"▶️ Начать тест ({k})", callback_data=f"nb:go:{li}:{fi}"))
+    kb.row(InlineKeyboardButton("📚 Назад", callback_data="nb:f" if li < 0 else f"nb:l:{li}"))
+    return "\n".join(lines)[:3500], kb
+
+
+def nb_test_start(uid, ids):
+    nb = nb_user(uid)
+    ids = list(ids)
+    random.shuffle(ids)
+    nb["test"] = {"ids": ids, "i": 0, "ok": [], "bad": []}
+    save_course()
+
+
+def nb_test_view(uid):
+    nb = nb_user(uid)
+    t = nb.get("test")
+    byid = {e["id"]: e for e in nb["items"]}
+    while t and t["i"] < len(t["ids"]) and t["ids"][t["i"]] not in byid:
+        t["i"] += 1                                   # слово удалили посреди теста
+    if not t or t["i"] >= len(t["ids"]):
+        ok_n, bad = len(t["ok"]) if t else 0, [byid[i] for i in (t["bad"] if t else []) if i in byid]
+        total = ok_n + len(bad)
+        lines = [_md(f"🧪 Готово: знал {ok_n} из {total}.")]
+        if bad:
+            lines += ["", _md("Повтори эти:")] + [nb_line(e) for e in bad]
+        kb = InlineKeyboardMarkup()
+        if bad:
+            kb.row(InlineKeyboardButton("🔁 Повторить ошибки", callback_data="nb:r"))
+        kb.row(InlineKeyboardButton("📚 Тетрадь", callback_data="nb:f"))
+        nb["last_bad"] = [e["id"] for e in bad]
+        nb["test"] = None
+        save_course()
+        return "\n".join(lines)[:3500], kb
+    e = byid[t["ids"][t["i"]]]
+    n = len(t["ids"])
+    lines = [_md(f"🧪 Тест · {t['i'] + 1} из {n}"), "", _md(f"{nb_flag(nb_lang(e))} {e['hu']}"), f"||{_md(e['ru'])}||", "",
+             _md("Вспомни перевод, потом нажми на скрытый текст и отметь, знал ли.")]
+    kb = InlineKeyboardMarkup()
+    kb.row(InlineKeyboardButton("✅ Знал", callback_data="nb:g:1"), InlineKeyboardButton("❌ Не знал", callback_data="nb:g:0"))
+    kb.row(InlineKeyboardButton("⏹ Закончить", callback_data="nb:e"))
+    return "\n".join(lines), kb
 
 
 @bot.message_handler(commands=["tetrad", "notebook"])
@@ -3496,6 +3601,50 @@ def on_nb(call):
                 text, kb = nb_topic_view(uid, li, fi, page, delete=True)
             else:
                 text, kb = nb_home_view(uid)
+        elif act == "s":                                   # открыть выбор слов для теста
+            nb["tsel"] = []
+            text, kb = nb_select_view(uid, int(p[2]), int(p[3]), 0)
+        elif act == "p":
+            text, kb = nb_select_view(uid, int(p[2]), int(p[3]), int(p[4]))
+        elif act in ("c", "a", "n"):
+            eid_or = int(p[2]) if act == "c" else None
+            li, fi, page = (int(p[3]), int(p[4]), int(p[5])) if act == "c" else (int(p[2]), int(p[3]), int(p[4]))
+            sel = set(nb.get("tsel") or [])
+            if act == "c":
+                sel ^= {eid_or}
+            else:
+                ids = {e["id"] for e in nb_pool(nb, li, fi)}
+                sel = (sel | ids) if act == "a" else (sel - ids)
+            nb["tsel"] = sorted(sel)
+            save_course()
+            text, kb = nb_select_view(uid, li, fi, page)
+        elif act == "go":
+            li, fi = int(p[2]), int(p[3])
+            ids = [e["id"] for e in nb_pool(nb, li, fi) if e["id"] in set(nb.get("tsel") or [])]
+            if not ids:
+                bot.answer_callback_query(call.id, "Сначала отметь слова")
+                return
+            nb_test_start(uid, ids)
+            text, kb = nb_test_view(uid)
+        elif act == "g":
+            t = nb.get("test")
+            if t and t["i"] < len(t["ids"]):
+                (t["ok"] if p[2] == "1" else t["bad"]).append(t["ids"][t["i"]])
+                t["i"] += 1
+                save_course()
+            text, kb = nb_test_view(uid)
+        elif act == "e":
+            t = nb.get("test")
+            if t:
+                t["i"] = len(t["ids"])
+            text, kb = nb_test_view(uid)
+        elif act == "r":
+            ids = [i for i in (nb.get("last_bad") or []) if any(e["id"] == i for e in nb["items"])]
+            if not ids:
+                text, kb = nb_home_view(uid)
+            else:
+                nb_test_start(uid, ids)
+                text, kb = nb_test_view(uid)
         elif act == "d":
             nb["items"] = [e for e in nb["items"] if e["id"] != int(p[2])]
             save_course()
