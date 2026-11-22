@@ -1839,47 +1839,64 @@ def _save_audio_ids():
         print(f"Не удалось сохранить audio_ids.json: {e}")
 
 
-def speech_file(text):
+TTS_VOICES = {"венгерский": "hu-HU-NoemiNeural", "английский": "en-GB-SoniaNeural", "испанский": "es-ES-ElviraNeural",
+              "немецкий": "de-DE-KatjaNeural", "французский": "fr-FR-DeniseNeural", "итальянский": "it-IT-ElsaNeural",
+              "португальский": "pt-PT-RaquelNeural", "польский": "pl-PL-ZofiaNeural", "чешский": "cs-CZ-VlastaNeural",
+              "румынский": "ro-RO-AlinaNeural", "украинский": "uk-UA-PolinaNeural", "русский": "ru-RU-SvetlanaNeural",
+              "турецкий": "tr-TR-EmelNeural", "греческий": "el-GR-AthinaNeural", "японский": "ja-JP-NanamiNeural",
+              "корейский": "ko-KR-SunHiNeural", "китайский": "zh-CN-XiaoxiaoNeural", "нидерландский": "nl-NL-ColetteNeural",
+              "шведский": "sv-SE-SofieNeural", "финский": "fi-FI-NooraNeural", "сербский": "sr-RS-SophieNeural",
+              "хорватский": "hr-HR-GabrijelaNeural", "болгарский": "bg-BG-KalinaNeural", "словацкий": "sk-SK-ViktoriaNeural"}
+
+
+def voice_for(lang):
+    return TTS_VOICES.get((lang or "").strip().lower(), TTS_VOICE)
+
+
+def speech_file(text, voice=None):
     """Путь к mp3 с произношением. Каждый текст озвучивается один раз и лежит в кэше."""
     if edge_tts is None:
         return None
+    voice = voice or TTS_VOICE
     os.makedirs(AUDIO_DIR, exist_ok=True)
-    name = hashlib.sha1(f"{TTS_VOICE}|{TTS_RATE}|{text}".encode("utf-8")).hexdigest()[:16]
+    name = hashlib.sha1(f"{voice}|{TTS_RATE}|{text}".encode("utf-8")).hexdigest()[:16]
     path = os.path.join(AUDIO_DIR, f"{name}.mp3")
     with _tts_lock:
         if os.path.exists(path) and os.path.getsize(path) > 0:
             return path
         tmp = path + ".part"
-        asyncio.run(edge_tts.Communicate(text, TTS_VOICE, rate=TTS_RATE).save(tmp))
+        asyncio.run(edge_tts.Communicate(text, voice, rate=TTS_RATE).save(tmp))
         os.replace(tmp, path)
     return path
 
 
-def send_speech(chat_id, text):
+def send_speech(chat_id, text, voice=None):
     """Присылает голосовое сообщение с произношением текста. True, если получилось."""
     text = text.strip()
     if not text:
         return False
+    voice = voice or TTS_VOICE
+    key = text if voice == TTS_VOICE else f"{voice}|{text}"
     try:
         bot.send_chat_action(chat_id, "record_voice")
     except Exception:
         pass
     try:
-        fid = _audio_ids.get(text)
+        fid = _audio_ids.get(key)
         if fid:
             try:
                 bot.send_voice(chat_id, fid)
                 return True
             except Exception:
-                _audio_ids.pop(text, None)     # file_id устарел: озвучим заново
-        path = speech_file(text)
+                _audio_ids.pop(key, None)     # file_id устарел: озвучим заново
+        path = speech_file(text, voice)
         if not path:
             return False
         with open(path, "rb") as f:
             sent = bot.send_voice(chat_id, f)
         info = getattr(sent, "voice", None) or getattr(sent, "audio", None)
         if info is not None and getattr(info, "file_id", None):
-            _audio_ids[text] = info.file_id
+            _audio_ids[key] = info.file_id
             _save_audio_ids()
             try:
                 os.remove(path)                    # файл больше не нужен: в Telegram есть file_id
@@ -1929,7 +1946,18 @@ _USER_DEFAULTS = {
 }
 
 
-STORE_CHAT = (os.getenv("STORE_CHAT_ID") or "").strip()      # закрытый канал для копии тетради (пережить любые деплои)
+def _parse_store_id(raw):
+    mm = re.search(r"-?\d{5,}", raw or "")
+    if not mm:
+        return ""
+    v = mm.group(0)
+    if not v.startswith("-"):                                  # id канала без минуса и 100: добавляем сами
+        v = "-100" + v if len(v) >= 10 else "-" + v
+    return v
+
+
+STORE_CHAT = _parse_store_id(os.getenv("STORE_CHAT_ID"))        # закрытый канал для копии тетради (пережить любые деплои)
+print(f"Канал для копии тетради: {STORE_CHAT or 'не задан'} (из переменной: {(os.getenv('STORE_CHAT_ID') or '')!r})")
 _backup_mid = {"id": None}
 
 
@@ -3212,6 +3240,10 @@ FLAGS = {"Венгерский": "🇭🇺", "Английский": "🇬🇧",
          "Латинский": "🏛️", "Латынь": "🏛️"}
 
 
+LANG_CHOICES = ["Венгерский", "Английский", "Испанский", "Немецкий", "Французский", "Итальянский",
+                "Португальский", "Польский", "Чешский", "Румынский", "Украинский", "Турецкий"]
+
+
 def nb_flag(lang):
     return FLAGS.get(lang, "🌍")
 NB_IMAGE = os.getenv("NB_IMAGE", "") == "1"          # картинка Réka над записью: по умолчанию выключена
@@ -3361,12 +3393,19 @@ def nb_parse(raw):
     return out
 
 
-def nb_analyze(text):
+def nb_analyze(text, prefer=None, force=None):
     """Разбор записи через ИИ. Причина неудачи запоминается, чтобы её было видно в карточке."""
     if not client:
         _nb_err["msg"] = "боту не передан ключ GROQ_API_KEY (или не установлена библиотека groq)"
         return None
-    msgs = [{"role": "system", "content": NB_PROMPT}, {"role": "user", "content": text[:300]}]
+    sysmsg = NB_PROMPT
+    if force:
+        sysmsg += (f" ВАЖНО: пользователь сам указал, что текст на языке «{force}». Не определяй язык заново: lang = {force}. "
+                   f"Исправь пропущенные диакритические знаки (например so → só) и переведи на русский.")
+    elif prefer:
+        sysmsg += (f" Если слово написано латиницей и может быть словом нескольких языков (например so, hat, van), "
+                   f"считай его словом языка «{prefer}», если оно там существует; пропущенные диакритики исправь (so → só).")
+    msgs = [{"role": "system", "content": sysmsg}, {"role": "user", "content": text[:300]}]
     for model in NB_MODELS:
         for kw in ({"response_format": {"type": "json_object"}}, {}):
             kw = dict(kw)
@@ -3376,6 +3415,8 @@ def nb_analyze(text):
                 done = client.chat.completions.create(model=model, temperature=0.2, max_tokens=1500, messages=msgs, **kw)
                 d = nb_parse(done.choices[0].message.content)
                 if d is not None:
+                    if force:
+                        d["lang"] = force
                     _nb_err["msg"] = ""
                     return d
                 _nb_err["msg"] = "ИИ ответил не в том формате"
@@ -3397,7 +3438,7 @@ def nb_add_one(uid, text):
     """Возвращает запись (при повторе помечена dup) или None."""
     nb = nb_user(uid)
     text = text.strip()
-    d = nb_analyze(text) or nb_fallback(text)
+    d = nb_analyze(text, prefer=nb.get("pref") or DEFAULT_LANG) or nb_fallback(text)
     if d and d.get("hu"):
         for old in nb["items"]:
             if _nb_norm(old["hu"]) == _nb_norm(d["hu"]) and nb_lang(old) == d["lang"]:
@@ -3424,6 +3465,9 @@ def nb_header(uid):
 
 def nb_markup(entry_id=None):
     kb = InlineKeyboardMarkup()
+    if entry_id:
+        kb.row(InlineKeyboardButton("🔊 Послушать", callback_data=f"nb:au:{entry_id}"),
+               InlineKeyboardButton("🌐 Не тот язык", callback_data=f"nb:lg:{entry_id}"))
     kb.row(InlineKeyboardButton("📚 Тетрадь", callback_data="nb:f"))
     if entry_id:
         kb.row(InlineKeyboardButton("🗑 Удалить", callback_data=f"nb:d:{entry_id}"))
@@ -3503,7 +3547,7 @@ def nb_lang_view(uid, li, single=False):
 PAGE = 8
 
 
-def nb_topic_view(uid, li, fi, page, delete=False):
+def nb_topic_view(uid, li, fi, page, delete=False, listen=False):
     nb = nb_user(uid)
     lang = nb["langs"][li] if 0 <= li < len(nb["langs"]) else DEFAULT_LANG
     f = FOLDERS[fi] if 0 <= fi < len(FOLDERS) else "Разное"
@@ -3511,9 +3555,14 @@ def nb_topic_view(uid, li, fi, page, delete=False):
     pages = max(1, math.ceil(len(items) / PAGE))
     page = min(max(page, 0), pages - 1)
     chunk = items[page * PAGE:(page + 1) * PAGE]
-    title = f"📁 {f} · {nb_flag(lang)} {lang} ({len(items)})" + ("\nНажми на слово, чтобы удалить." if delete else "")
+    title = f"📁 {f} · {nb_flag(lang)} {lang} ({len(items)})" + ("\nНажми на слово, чтобы удалить." if delete else "\nНажми на слово, чтобы послушать." if listen else "")
     lines = [_md(title), ""] + [nb_line(e) for e in chunk]
     kb = InlineKeyboardMarkup()
+    if listen:
+        for e in chunk:
+            kb.row(InlineKeyboardButton(f"🔊 {e['hu']}"[:60], callback_data=f"nb:au:{e['id']}"))
+        kb.row(InlineKeyboardButton("✅ Готово", callback_data=f"nb:t:{li}:{fi}:{page}"))
+        return "\n".join(lines)[:3500], kb
     if delete:
         for e in chunk:
             kb.row(InlineKeyboardButton(f"🗑 {e['hu']}"[:60], callback_data=f"nb:y:{e['id']}:{li}:{fi}:{page}"))
@@ -3528,7 +3577,8 @@ def nb_topic_view(uid, li, fi, page, delete=False):
         kb.row(*nav)
     if chunk:
         kb.row(InlineKeyboardButton("🧪 Тест", callback_data=f"nb:s:{li}:{fi}"),
-               InlineKeyboardButton("🗑 Удалить слова", callback_data=f"nb:z:{li}:{fi}:{page}"))
+               InlineKeyboardButton("🔊 Слушать", callback_data=f"nb:w:{li}:{fi}:{page}"))
+        kb.row(InlineKeyboardButton("🗑 Удалить слова", callback_data=f"nb:z:{li}:{fi}:{page}"))
     kb.row(InlineKeyboardButton("📚 Назад", callback_data=f"nb:l:{li}" if len(nb["langs"]) > 1 else "nb:f"))
     return "\n".join(lines)[:3500], kb
 
@@ -3740,8 +3790,56 @@ def on_nb(call):
             text, kb = nb_home_view(uid)
         elif act == "l":
             text, kb = nb_lang_view(uid, int(p[2]))
-        elif act in ("t", "z"):
-            text, kb = nb_topic_view(uid, int(p[2]), int(p[3]), int(p[4]), delete=(act == "z"))
+        elif act in ("t", "z", "w"):
+            text, kb = nb_topic_view(uid, int(p[2]), int(p[3]), int(p[4]), delete=(act == "z"), listen=(act == "w"))
+        elif act == "au":
+            e = next((x for x in nb["items"] if x["id"] == int(p[2])), None)
+            if e and e.get("hu"):
+                if not send_speech(chat, e["hu"], voice_for(nb_lang(e))):
+                    bot.answer_callback_query(call.id, "Не получилось озвучить, попробуй позже")
+            return
+        elif act == "lg":
+            eid = int(p[2])
+            e = next((x for x in nb["items"] if x["id"] == eid), None)
+            if not e:
+                text, kb = nb_home_view(uid)
+            else:
+                text = _md(f"🌐 На каком языке «{e['hu']}»?")
+                kb = InlineKeyboardMarkup()
+                row = []
+                for k, l in enumerate(LANG_CHOICES):
+                    row.append(InlineKeyboardButton(f"{nb_flag(l)} {l}", callback_data=f"nb:ls:{eid}:{k}"))
+                    if len(row) == 2:
+                        kb.row(*row)
+                        row = []
+                if row:
+                    kb.row(*row)
+                kb.row(InlineKeyboardButton("⬅️ Назад", callback_data=f"nb:cd:{eid}"))
+        elif act == "cd":
+            e = next((x for x in nb["items"] if x["id"] == int(p[2])), None)
+            text, kb = (nb_card(e), nb_markup(e["id"])) if e else nb_home_view(uid)
+        elif act == "ls":
+            eid, k = int(p[2]), int(p[3])
+            e = next((x for x in nb["items"] if x["id"] == eid), None)
+            if not e or not (0 <= k < len(LANG_CHOICES)):
+                text, kb = nb_home_view(uid)
+            else:
+                lang = LANG_CHOICES[k]
+                nb["pref"] = lang
+                d = nb_analyze(e.get("src") or e["hu"], force=lang)
+                e["lang"], e["force"] = lang, lang
+                if d and d.get("hu"):
+                    e.update(pos=d["pos"], hu=d["hu"], ru=d["ru"], note=d["note"], pending=False, v=3)
+                else:
+                    e["pending"], e["tries"] = True, 0
+                twin = next((x for x in nb["items"] if x["id"] != e["id"] and nb_lang(x) == lang and _nb_norm(x["hu"]) == _nb_norm(e["hu"])), None)
+                if twin:
+                    nb["items"] = [x for x in nb["items"] if x["id"] != e["id"]]
+                    e = dict(twin, dup=True)
+                if lang not in nb["langs"]:
+                    nb["langs"].append(lang)
+                save_course()
+                text, kb = nb_card(e), nb_markup(e["id"])
         elif act == "y":
             eid, li, fi, page = map(int, p[2:6])
             nb["items"] = [e for e in nb["items"] if e["id"] != eid]
@@ -3847,7 +3945,7 @@ def nb_fill_pending(uid, limit=3):
         if (e.get("pending") or e.get("v") != 3) and e.get("tries", 0) < 3 and n < limit and e.get("src") != "meme":
             n += 1
             e["tries"] = e.get("tries", 0) + 1
-            d = nb_analyze(e.get("src") or e["hu"])
+            d = nb_analyze(e.get("src") or e["hu"], prefer=nb.get("pref") or DEFAULT_LANG, force=e.get("force"))
             if d and d["hu"]:
                 e.update(lang=d["lang"], pos=d["pos"], hu=d["hu"], ru=d["ru"], note=d["note"], pending=False, v=3)
                 if d["lang"] not in nb["langs"]:
