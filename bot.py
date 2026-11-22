@@ -3433,14 +3433,18 @@ def nb_analyze(text, prefer=None, force=None):
 
 
 NB_FORMS_PROMPT = (
-    "Ты помощник по языкам для русскоговорящего. Для слова или фразы на языке «{lang}» дай 5-6 коротких вариаций: "
-    "другие формы (время, лицо, число, падеж) и 1-2 короткие фразы с этим словом, от простого к более сложному. "
-    "Каждая вариация на изучаемом языке и её перевод на русский. "
-    'Верни ТОЛЬКО JSON: {{"forms":[{{"t":"вариация","ru":"перевод"}}]}}. Не выдумывай несуществующих форм.'
+    "Ты помощник по языкам для русскоговорящего. Для слова или фразы на языке «{lang}» дай 4-6 РАЗНЫХ вариаций употребления. "
+    "Если у слова есть настоящие формы, дай их (например have to: has to, had to, will have to), и добавь короткие естественные фразы с ним. "
+    "Если слово не изменяется (устойчивое сочетание, наречие, прилагательное), дай только короткие примеры предложений с ним. "
+    "Правила: у каждой вариации свой текст, ничего не повторяй; не пиши в скобках названия грамматических форм (plural, past perfect и т.п.); "
+    "не выдумывай несуществующих форм; перевод должен точно соответствовать именно этой вариации. "
+    'Верни ТОЛЬКО JSON: {{"forms":[{{"t":"вариация","ru":"перевод"}}]}}.'
 )
+_FORM_LABEL = re.compile(r"\((?:[^)]*\b)?(plural|singular|past|present|future|perfect|continuous|passive|gerund|participle|infinitive|"
+                         r"множ|един|прош|наст|буд|страдат)[^)]*\)", re.I)
 
 
-def nb_parse_forms(raw):
+def nb_parse_forms(raw, base=""):
     m = re.search(r"\{.*\}", raw or "", re.S)
     if not m:
         return None
@@ -3448,16 +3452,22 @@ def nb_parse_forms(raw):
         d = json.loads(m.group(0))
     except Exception:
         return None
-    out = []
+    out, seen = [], {_nb_norm(base)} if base else set()
     for f in (d.get("forms") if isinstance(d, dict) else None) or []:
-        if isinstance(f, dict) and str(f.get("t") or "").strip():
-            out.append({"t": str(f["t"]).strip()[:80], "ru": str(f.get("ru") or "").strip()[:80]})
+        if not isinstance(f, dict):
+            continue
+        t = str(f.get("t") or "").strip()
+        ru = str(f.get("ru") or "").strip()
+        if not t or _FORM_LABEL.search(t) or _nb_norm(t) in seen:
+            continue
+        seen.add(_nb_norm(t))
+        out.append({"t": t[:80], "ru": ru[:80]})
     return out[:6] or None
 
 
 def nb_forms(e):
     """Вариации слова: берём из записи, а если их ещё нет, просим ИИ и запоминаем."""
-    if e.get("forms"):
+    if e.get("forms") and e.get("fv") == 2:
         return e["forms"]
     if not client:
         return []
@@ -3469,9 +3479,9 @@ def nb_forms(e):
                 kw["extra_body"] = {"reasoning_effort": "low"}
             try:
                 done = client.chat.completions.create(model=model, temperature=0.3, max_tokens=900, messages=msgs, **kw)
-                forms = nb_parse_forms(done.choices[0].message.content)
+                forms = nb_parse_forms(done.choices[0].message.content, e["hu"])
                 if forms:
-                    e["forms"] = forms
+                    e["forms"], e["fv"] = forms, 2
                     save_course()
                     return forms
             except Exception as ex:
