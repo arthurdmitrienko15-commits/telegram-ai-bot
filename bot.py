@@ -3317,6 +3317,12 @@ def nb_show(chat_id, body, kb=None):
     mine = [e for e in u["trail"] if e[2] not in ("user", "voice")]
     if mine and mine[-1][2] == "screen" and not NB_IMAGE:
         mine = []                                   # старое сообщение с картинкой: заменяем текстовым, а не правим
+    if mine and "||" in body:
+        # Telegram помнит открытый спойлер у сообщения даже после правки: стираем старое и шлём заново, перевод снова скрыт
+        gone = [e[0] for e in mine]
+        u["trail"] = [e for e in u["trail"] if e[0] not in gone]
+        _tidy_delete(chat_id, gone)
+        mine = []
     if mine:
         mid = mine[-1][0]
         try:
@@ -3573,12 +3579,20 @@ def nb_topic_view(uid, li, fi, page, delete=False, listen=False):
         nav.append(InlineKeyboardButton("◀️", callback_data=f"nb:t:{li}:{fi}:{page - 1}"))
     if page < pages - 1:
         nav.append(InlineKeyboardButton("▶️", callback_data=f"nb:t:{li}:{fi}:{page + 1}"))
+    if chunk:
+        row = []
+        for e in chunk:
+            row.append(InlineKeyboardButton(f"🔊 {e['hu']}"[:30], callback_data=f"nb:au:{e['id']}"))
+            if len(row) == 2:
+                kb.row(*row)
+                row = []
+        if row:
+            kb.row(*row)
     if nav:
         kb.row(*nav)
     if chunk:
         kb.row(InlineKeyboardButton("🧪 Тест", callback_data=f"nb:s:{li}:{fi}"),
-               InlineKeyboardButton("🔊 Слушать", callback_data=f"nb:w:{li}:{fi}:{page}"))
-        kb.row(InlineKeyboardButton("🗑 Удалить слова", callback_data=f"nb:z:{li}:{fi}:{page}"))
+               InlineKeyboardButton("🗑 Удалить слова", callback_data=f"nb:z:{li}:{fi}:{page}"))
     kb.row(InlineKeyboardButton("📚 Назад", callback_data=f"nb:l:{li}" if len(nb["langs"]) > 1 else "nb:f"))
     return "\n".join(lines)[:3500], kb
 
@@ -3634,10 +3648,12 @@ def nb_select_view(uid, li, fi, page):
     return "\n".join(lines)[:3500], kb
 
 
-RIGHT_SAY = ["Ни хуя себе, угадал.", "Ого, мозг всё-таки работает.", "Да ты охуенен. Сам в шоке.", "Блин, правильно. Не ожидала.",
-             "Заебись. Продолжай в том же духе.", "Это было слишком легко, не расслабляйся.", "Красавчик, хуле."]
-WRONG_SAY = ["Ты ебанулся? Нет, конечно.", "Пиздец. Это даже близко не то.", "Серьёзно?! Блять, смотри правильный ответ.",
-             "Я в тебя верила. Зря.", "Мимо, как всегда. Запоминай, мудила.", "Ну охуеть, конечно. Нет.", "Даже кот бы угадал, а ты нет."]
+RIGHT_SAY = ["Угадал. Или знал. Не будем уточнять.", "Вот так бы всегда.", "Подозрительно хорошо.",
+             "Принято. Продолжай, пока везёт.", "Мозг: проснулся. Надолго ли?", "Этого я от тебя не ждала. Приятно.",
+             "Верно. Я даже немного горжусь."]
+WRONG_SAY = ["Смелый выбор. Неправильный, но смелый.", "Ну… красиво мимо.", "Нет. Но уверенность была на пять.",
+             "Это было близко. Нет, не было.", "Запомни это лицо ошибки.", "Даже мой кот ответил бы лучше.",
+             "Я записала. Мы к этому вернёмся."]
 OPT_ICONS = ["🟦", "🟥", "🟨", "🟩"]
 
 
@@ -3686,7 +3702,7 @@ def nb_test_view(uid):
         ok_n, bad = len(t["ok"]) if t else 0, [byid[i] for i in (t["bad"] if t else []) if i in byid]
         total = ok_n + len(bad)
         pct = (100 * ok_n // total) if total else 0
-        verdict = "Сто процентов. Не верю, ты точно не подсматривал, сука 🤨" if pct == 100 else "Нормально, хуле, не позорище 💪" if pct >= 70 else "Так себе. Пересдавай, не будь тряпкой." if pct >= 40 else "Это пиздец. Учи слова, блять, и пересдавай."
+        verdict = "Сто процентов. Подозреваю, ты подглядывал 🤨" if pct == 100 else "Крепко. Так и держи 💪" if pct >= 70 else "Середнячок. Но пересдача решает всё." if pct >= 40 else "Ну, зато есть куда расти. Пересдавай."
         lines = [_md(f"🧪 Готово: {ok_n} из {total}"), _md(nb_bar(t) if t else ""), "", _md(verdict)]
         if bad:
             lines += ["", _md("Ошибки:")] + [nb_line(e) for e in bad]
