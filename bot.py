@@ -1929,15 +1929,89 @@ _USER_DEFAULTS = {
 }
 
 
+STORE_CHAT = (os.getenv("STORE_CHAT_ID") or "").strip()      # закрытый канал для копии тетради (пережить любые деплои)
+_backup_mid = {"id": None}
+
+
+def _restore_backup():
+    """Файла нет (чистый диск после деплоя): берём копию тетради из закрытого канала."""
+    if not STORE_CHAT:
+        return False
+    try:
+        chat = bot.get_chat(STORE_CHAT)
+        pm = getattr(chat, "pinned_message", None)
+        doc = getattr(pm, "document", None)
+        if not doc:
+            print("Копия тетради в канале не найдена (ещё нет закреплённого файла).")
+            return False
+        raw = bot.download_file(bot.get_file(doc.file_id).file_path)
+        json.loads(raw.decode("utf-8"))                     # проверяем, что это валидный JSON
+        with open(COURSE_FILE, "wb") as f:
+            f.write(raw)
+        _backup_mid["id"] = pm.message_id
+        print(f"Тетрадь восстановлена из канала: {len(raw)} байт.")
+        return True
+    except Exception as e:
+        print(f"Не удалось восстановить копию из канала: {e}")
+        return False
+
+
 def _load_course():
     try:
         with open(COURSE_FILE, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
-        return {}
+        pass
+    if _restore_backup():
+        try:
+            with open(COURSE_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
 
 
 _store = _load_course()   # {user_id: {...}}
+_backup_timer = {"t": None}
+
+
+def _do_backup():
+    if not STORE_CHAT:
+        return
+    try:
+        with _lock:
+            data = json.dumps(_store, ensure_ascii=False).encode("utf-8")
+        import io
+        buf = io.BytesIO(data)
+        buf.name = "course.json"
+        m = bot.send_document(STORE_CHAT, buf, caption="Копия тетради Réka", disable_notification=True)
+        try:
+            bot.pin_chat_message(STORE_CHAT, m.message_id, disable_notification=True)
+        except Exception as e:
+            print(f"Не закрепила копию: {e}")
+        old = _backup_mid["id"]
+        _backup_mid["id"] = m.message_id
+        if old and old != m.message_id:
+            try:
+                bot.delete_message(STORE_CHAT, old)
+            except Exception:
+                pass
+        print(f"[backup] копия в канал: {len(data)} байт")
+    except Exception as e:
+        print(f"Не удалось отправить копию в канал: {e}")
+
+
+def _schedule_backup():
+    """Копия уходит не чаще раза в несколько секунд, чтобы не засыпать канал."""
+    if not STORE_CHAT:
+        return
+    t = _backup_timer["t"]
+    if t is not None and t.is_alive():
+        return
+    t = threading.Timer(8.0, _do_backup)
+    t.daemon = True
+    _backup_timer["t"] = t
+    t.start()
 
 
 def save_course():
@@ -1950,6 +2024,7 @@ def save_course():
             print(f"[save] {COURSE_FILE}: {os.path.getsize(COURSE_FILE)} байт, записей: {sum(len((u.get('nb') or {}).get('items') or []) for u in _store.values())}")
         except Exception as e:
             print(f"Не удалось сохранить course.json: {e}")
+    _schedule_backup()
 
 
 def U(uid):
@@ -3605,6 +3680,19 @@ def nb_test_view(uid):
     kb.row(InlineKeyboardButton("⏹ Закончить", callback_data="nb:e"))
     save_course()
     return "\n".join(lines), kb
+
+
+def _store_id_reply(m):
+    try:
+        bot.send_message(m.chat.id, f"STORE_CHAT_ID = {m.chat.id}")
+    except Exception as e:
+        print(f"storeid: {e}")
+
+
+if callable(getattr(bot, "channel_post_handler", None)) and hasattr(telebot.TeleBot, "channel_post_handler"):
+    @bot.channel_post_handler(func=lambda m: (getattr(m, "text", None) or "").strip().startswith("/storeid"))
+    def storeid_channel(m):
+        _store_id_reply(m)
 
 
 @bot.message_handler(commands=["tetrad", "notebook"])
