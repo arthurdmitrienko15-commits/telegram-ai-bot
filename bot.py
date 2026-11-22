@@ -3432,6 +3432,76 @@ def nb_analyze(text, prefer=None, force=None):
     return None
 
 
+NB_FORMS_PROMPT = (
+    "Ты помощник по языкам для русскоговорящего. Для слова или фразы на языке «{lang}» дай 5-6 коротких вариаций: "
+    "другие формы (время, лицо, число, падеж) и 1-2 короткие фразы с этим словом, от простого к более сложному. "
+    "Каждая вариация на изучаемом языке и её перевод на русский. "
+    'Верни ТОЛЬКО JSON: {{"forms":[{{"t":"вариация","ru":"перевод"}}]}}. Не выдумывай несуществующих форм.'
+)
+
+
+def nb_parse_forms(raw):
+    m = re.search(r"\{.*\}", raw or "", re.S)
+    if not m:
+        return None
+    try:
+        d = json.loads(m.group(0))
+    except Exception:
+        return None
+    out = []
+    for f in (d.get("forms") if isinstance(d, dict) else None) or []:
+        if isinstance(f, dict) and str(f.get("t") or "").strip():
+            out.append({"t": str(f["t"]).strip()[:80], "ru": str(f.get("ru") or "").strip()[:80]})
+    return out[:6] or None
+
+
+def nb_forms(e):
+    """Вариации слова: берём из записи, а если их ещё нет, просим ИИ и запоминаем."""
+    if e.get("forms"):
+        return e["forms"]
+    if not client:
+        return []
+    msgs = [{"role": "system", "content": NB_FORMS_PROMPT.format(lang=nb_lang(e))}, {"role": "user", "content": e["hu"][:120]}]
+    for model in NB_MODELS:
+        for kw in ({"response_format": {"type": "json_object"}}, {}):
+            kw = dict(kw)
+            if model.startswith("openai/gpt-oss"):
+                kw["extra_body"] = {"reasoning_effort": "low"}
+            try:
+                done = client.chat.completions.create(model=model, temperature=0.3, max_tokens=900, messages=msgs, **kw)
+                forms = nb_parse_forms(done.choices[0].message.content)
+                if forms:
+                    e["forms"] = forms
+                    save_course()
+                    return forms
+            except Exception as ex:
+                print(f"Groq forms error ({model}): {ex}")
+    return []
+
+
+def nb_detail_view(uid, eid, li=-1, page=0):
+    nb = nb_user(uid)
+    e = next((x for x in nb["items"] if x["id"] == eid), None)
+    if not e:
+        return nb_home_view(uid)
+    forms = nb_forms(e)
+    lines = [_md(f"{nb_flag(nb_lang(e))} {nb_lang(e)}"), "", "*" + _md(e["hu"]) + "*"]
+    lines.append(f"||{_md(e['ru'])}||" if e["ru"] else _md("…"))
+    if forms:
+        lines += ["", _md("Варианты:")] + [f"• {_md(f['t'])} — " + (f"||{_md(f['ru'])}||" if f["ru"] else "…") for f in forms]
+    else:
+        lines += ["", _md("Варианты пока не загрузились, нажми «📖 Обновить».")]
+    if e.get("note"):
+        lines += ["", "💡 ||" + _md(e["note"]) + "||"]
+    kb = InlineKeyboardMarkup()
+    kb.row(InlineKeyboardButton("🔊 Слово", callback_data=f"nb:au:{eid}"),
+           InlineKeyboardButton("🔊 Варианты", callback_data=f"nb:av:{eid}") if forms else InlineKeyboardButton("📖 Обновить", callback_data=f"nb:o:{eid}:{li}:{page}"))
+    kb.row(InlineKeyboardButton("🌐 Не тот язык", callback_data=f"nb:lg:{eid}"),
+           InlineKeyboardButton("🗑 Удалить", callback_data=f"nb:d:{eid}"))
+    kb.row(InlineKeyboardButton("⬅️ К списку" if li >= 0 else "📚 Тетрадь", callback_data=f"nb:ln:{li}:{page}" if li >= 0 else "nb:f"))
+    return "\n".join(lines)[:3800], kb
+
+
 def nb_fallback(text):
     """Без ИИ: слово из ходового списка разбираем сами."""
     w = _nb_norm(text)
@@ -3472,8 +3542,9 @@ def nb_header(uid):
 def nb_markup(entry_id=None):
     kb = InlineKeyboardMarkup()
     if entry_id:
-        kb.row(InlineKeyboardButton("🔊 Послушать", callback_data=f"nb:au:{entry_id}"),
-               InlineKeyboardButton("🌐 Не тот язык", callback_data=f"nb:lg:{entry_id}"))
+        kb.row(InlineKeyboardButton("📖 Варианты", callback_data=f"nb:o:{entry_id}:-1:0"),
+               InlineKeyboardButton("🔊 Послушать", callback_data=f"nb:au:{entry_id}"))
+        kb.row(InlineKeyboardButton("🌐 Не тот язык", callback_data=f"nb:lg:{entry_id}"))
     kb.row(InlineKeyboardButton("📚 Тетрадь", callback_data="nb:f"))
     if entry_id:
         kb.row(InlineKeyboardButton("🗑 Удалить", callback_data=f"nb:d:{entry_id}"))
@@ -3485,7 +3556,7 @@ def nb_line(e):
 
 
 def nb_card(e):
-    lines = [_md(("📝 Уже есть в тетради" if e.get("dup") else "📝 Записала") + f" · {nb_flag(nb_lang(e))} {nb_lang(e)} · {nb_folder(e)}"), "", _md(e["hu"])]
+    lines = [_md(("📝 Уже есть в тетради" if e.get("dup") else "📝 Записала") + f" · {nb_flag(nb_lang(e))} {nb_lang(e)}"), "", _md(e["hu"])]
     if e["ru"]:
         lines.append(f"||{_md(e['ru'])}||")
     else:
@@ -3517,13 +3588,60 @@ def nb_home_view(uid):
     if not nb["items"]:
         return _md("📚 Тетрадь пока пустая. Напиши мне любое слово, фразу, место или песню на любом языке, и я положу её на нужную полку."), InlineKeyboardMarkup()
     if len(langs) == 1:
-        return nb_lang_view(uid, nb["langs"].index(langs[0]), single=True)
+        return nb_list_view(uid, nb["langs"].index(langs[0]), 0, single=True)
     kb = InlineKeyboardMarkup()
     for l in langs:
         n = len([e for e in nb["items"] if nb_lang(e) == l])
         kb.row(InlineKeyboardButton(f"{nb_flag(l)} {l} · {n}", callback_data=f"nb:l:{nb['langs'].index(l)}"))
     kb.row(InlineKeyboardButton("🧪 Тест", callback_data="nb:s:-1:-1"))
     return _md("📚 Твоя тетрадь. Выбери язык."), kb
+
+
+def nb_list_view(uid, li, page=0, delete=False, single=False):
+    """Все слова языка: каждое слово своей кнопкой, новые сверху. Нажал слово: перевод, варианты и озвучка."""
+    nb = nb_user(uid)
+    lang = nb["langs"][li] if 0 <= li < len(nb["langs"]) else DEFAULT_LANG
+    items = [e for e in reversed(nb["items"]) if nb_lang(e) == lang]
+    pages = max(1, math.ceil(len(items) / PAGE))
+    page = min(max(page, 0), pages - 1)
+    chunk = items[page * PAGE:(page + 1) * PAGE]
+    head = f"{nb_flag(lang)} {lang} · слов: {len(items)}" + (f" · стр. {page + 1}/{pages}" if pages > 1 else "")
+    hint = "Нажми слово, чтобы удалить." if delete else "Нажми слово: перевод, варианты и озвучка."
+    text = _md(head) + ("\n" + _md(hint) if chunk else "")
+    kb = InlineKeyboardMarkup()
+    row = []
+    for e in chunk:
+        label = (("🗑 " if delete else "") + e["hu"])[:40]
+        cb = f"nb:ly:{e['id']}:{li}:{page}" if delete else f"nb:o:{e['id']}:{li}:{page}"
+        btn = InlineKeyboardButton(label, callback_data=cb)
+        if len(label) <= 18:
+            row.append(btn)
+            if len(row) == 2:
+                kb.row(*row)
+                row = []
+        else:
+            if row:
+                kb.row(*row)
+                row = []
+            kb.row(btn)
+    if row:
+        kb.row(*row)
+    if delete:
+        kb.row(InlineKeyboardButton("✅ Готово", callback_data=f"nb:ln:{li}:{page}"))
+        return text, kb
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"nb:ln:{li}:{page - 1}"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"nb:ln:{li}:{page + 1}"))
+    if nav:
+        kb.row(*nav)
+    if chunk:
+        kb.row(InlineKeyboardButton("🧪 Тест", callback_data=f"nb:s:{li}:-1"),
+               InlineKeyboardButton("🗑 Удалить", callback_data=f"nb:lz:{li}:{page}"))
+    if not single and len(nb["langs"]) > 1:
+        kb.row(InlineKeyboardButton("⬅️ Языки", callback_data="nb:f"))
+    return text, kb
 
 
 def nb_lang_view(uid, li, single=False):
@@ -3550,7 +3668,7 @@ def nb_lang_view(uid, li, single=False):
     return _md(head), kb
 
 
-PAGE = 8
+PAGE = 10
 
 
 def nb_topic_view(uid, li, fi, page, delete=False, listen=False):
@@ -3805,9 +3923,34 @@ def on_nb(call):
         if act == "f":
             text, kb = nb_home_view(uid)
         elif act == "l":
-            text, kb = nb_lang_view(uid, int(p[2]))
+            text, kb = nb_list_view(uid, int(p[2]), 0)
+        elif act == "ln":
+            text, kb = nb_list_view(uid, int(p[2]), int(p[3]))
+        elif act == "lz":
+            text, kb = nb_list_view(uid, int(p[2]), int(p[3]), delete=True)
+        elif act == "ly":
+            eid, li, page = int(p[2]), int(p[3]), int(p[4])
+            nb["items"] = [e for e in nb["items"] if e["id"] != eid]
+            save_course()
+            lang = nb["langs"][li] if 0 <= li < len(nb["langs"]) else None
+            if lang and any(nb_lang(e) == lang for e in nb["items"]):
+                text, kb = nb_list_view(uid, li, page, delete=True)
+            else:
+                text, kb = nb_home_view(uid)
         elif act in ("t", "z", "w"):
-            text, kb = nb_topic_view(uid, int(p[2]), int(p[3]), int(p[4]), delete=(act == "z"), listen=(act == "w"))
+            text, kb = nb_list_view(uid, int(p[2]), 0, delete=(act == "z"))
+        elif act == "o":
+            try:
+                bot.answer_callback_query(call.id, "Секунду…")
+            except Exception:
+                pass
+            text, kb = nb_detail_view(uid, int(p[2]), int(p[3]), int(p[4]))
+        elif act == "av":
+            e = next((x for x in nb["items"] if x["id"] == int(p[2])), None)
+            if e and e.get("forms"):
+                if not send_speech(chat, ". ".join(f["t"] for f in e["forms"]), voice_for(nb_lang(e))):
+                    bot.answer_callback_query(call.id, "Не получилось озвучить, попробуй позже")
+            return
         elif act == "au":
             e = next((x for x in nb["items"] if x["id"] == int(p[2])), None)
             if e and e.get("hu"):
@@ -3844,6 +3987,7 @@ def on_nb(call):
                 nb["pref"] = lang
                 d = nb_analyze(e.get("src") or e["hu"], force=lang)
                 e["lang"], e["force"] = lang, lang
+                e.pop("forms", None)
                 if d and d.get("hu"):
                     e.update(pos=d["pos"], hu=d["hu"], ru=d["ru"], note=d["note"], pending=False, v=3)
                 else:
