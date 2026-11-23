@@ -3947,9 +3947,17 @@ def nb_test_view(uid):
             cur = {"type": "type", "i": t["i"], "hint": 0}
             t["cur"] = cur
         words = len(e["hu"].split())
-        hint = nb_hint(e["hu"], cur["hint"]) if cur["hint"] else f"слов: {words}, букв: {len(re.sub(r'[^\w]', '', e['hu']))}"
+        size = f"слов: {words}, букв: {len(re.sub(r'[^\w]', '', e['hu']))}"
+        lvl = cur["hint"]
+        hint = size if lvl == 0 else (size + ". Послушай голосовое и напиши то, что услышишь") if lvl == 1 else nb_hint(e["hu"], lvl - 1)
         lines = head + [_md(e["ru"]), "", _md(f"Напиши это на языке: {nb_flag(nb_lang(e))} {nb_lang(e)}"), _md("(просто отправь сообщением)"), "", _md("💡 " + hint)]
-        kb.row(InlineKeyboardButton("💡 Подсказка", callback_data="nb:hn"), InlineKeyboardButton("🤷 Не помню", callback_data="nb:dk"))
+        row = []
+        if lvl < 3:
+            row.append(InlineKeyboardButton("💡 Подсказка", callback_data="nb:hn"))
+        row.append(InlineKeyboardButton("🤷 Не помню", callback_data="nb:dk"))
+        kb.row(*row)
+        if lvl >= 1:
+            kb.row(InlineKeyboardButton("🔊 Послушать ещё раз", callback_data="nb:hv"))
         kb.row(InlineKeyboardButton("⏹ Закончить", callback_data="nb:e"))
         save_course()
         return "\n".join(lines), kb
@@ -4054,6 +4062,7 @@ def on_nb(call):
     except Exception:
         pass
     p = call.data.split(":")
+    after_voice = None
     try:
         nb = nb_user(uid)
         nb_sweep(chat, call.message.message_id)
@@ -4187,8 +4196,19 @@ def on_nb(call):
             t = nb.get("test")
             cur = t and t.get("cur")
             if cur and cur.get("type") == "type" and not t.get("fb"):
-                cur["hint"] = min(cur.get("hint", 0) + 1, 2)
+                cur["hint"] = min(cur.get("hint", 0) + 1, 3)
+                if cur["hint"] == 1:                    # первая подсказка: аудио, чтобы написать на слух
+                    e = next((x for x in nb["items"] if x["id"] == t["ids"][t["i"]]), None)
+                    if e:
+                        after_voice = (e["hu"], voice_for(nb_lang(e)))
             text, kb = nb_test_view(uid)
+        elif act == "hv":
+            t = nb.get("test")
+            cur = t and t.get("cur")
+            e = cur and cur.get("type") == "type" and not t.get("fb") and next((x for x in nb["items"] if x["id"] == t["ids"][t["i"]]), None)
+            if e:
+                send_speech(chat, e["hu"], voice_for(nb_lang(e)))
+            return
         elif act == "dk":
             t = nb.get("test")
             cur = t and t.get("cur")
@@ -4258,6 +4278,8 @@ def on_nb(call):
         else:
             return
         nb_show(chat, text, kb)
+        if after_voice:                                  # голосовое шлём после правки: иначе оно бы удалилось вместе со старым
+            send_speech(chat, after_voice[0], after_voice[1])
     except Exception as e:
         print(f"Ошибка тетради: {e}")
 
