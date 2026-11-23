@@ -3890,6 +3890,21 @@ def nb_bar(t):
     return "🟩" * done + "⬜" * (10 - done)
 
 
+def nb_widen_ru(e):
+    """Один раз дополняет перевод главными значениями (по три на часть речи), чтобы вопрос не сужал слово до одного смысла."""
+    if e.get("mv") or len(e["hu"].split()) > 3:
+        return
+    e["mv"] = 1
+    try:
+        d = nb_analyze(e.get("src") or e["hu"], force=nb_lang(e), recheck=e.get("ru") or "?")
+    except Exception as ex:
+        print(f"widen: {ex}")
+        return
+    if d and d.get("ru") and len(d["ru"]) >= len(e.get("ru") or ""):
+        e["ru"] = d["ru"]
+        e.pop("forms", None)
+
+
 def nb_test_view(uid):
     nb = nb_user(uid)
     t = nb.get("test")
@@ -3948,15 +3963,18 @@ def nb_test_view(uid):
             t["cur"] = cur
         words = len(e["hu"].split())
         size = f"слов: {words}, букв: {len(re.sub(r'[^\w]', '', e['hu']))}"
+        nb_widen_ru(e)
         lvl = cur["hint"]
-        hint = size if lvl == 0 else (size + ". Послушай голосовое и напиши то, что услышишь") if lvl == 1 else nb_hint(e["hu"], lvl - 1)
+        hint = size if lvl == 0 else nb_hint(e["hu"], lvl)
         lines = head + [_md(e["ru"]), "", _md(f"Напиши это на языке: {nb_flag(nb_lang(e))} {nb_lang(e)}"), _md("(просто отправь сообщением)"), "", _md("💡 " + hint)]
+        if cur.get("heard"):
+            lines += [_md("🔊 Послушай голосовое и напиши то, что услышишь")]
         row = []
-        if lvl < 3:
+        if lvl < 2:
             row.append(InlineKeyboardButton("💡 Подсказка", callback_data="nb:hn"))
-        row.append(InlineKeyboardButton("🤷 Не помню", callback_data="nb:dk"))
+        row.append(InlineKeyboardButton("🏳️ Показать ответ" if cur.get("heard") else "🤷 Не помню", callback_data="nb:dk"))
         kb.row(*row)
-        if lvl >= 1:
+        if cur.get("heard"):
             kb.row(InlineKeyboardButton("🔊 Послушать ещё раз", callback_data="nb:hv"))
         kb.row(InlineKeyboardButton("⏹ Закончить", callback_data="nb:e"))
         save_course()
@@ -4196,11 +4214,7 @@ def on_nb(call):
             t = nb.get("test")
             cur = t and t.get("cur")
             if cur and cur.get("type") == "type" and not t.get("fb"):
-                cur["hint"] = min(cur.get("hint", 0) + 1, 3)
-                if cur["hint"] == 1:                    # первая подсказка: аудио, чтобы написать на слух
-                    e = next((x for x in nb["items"] if x["id"] == t["ids"][t["i"]]), None)
-                    if e:
-                        after_voice = (e["hu"], voice_for(nb_lang(e)))
+                cur["hint"] = min(cur.get("hint", 0) + 1, 2)
             text, kb = nb_test_view(uid)
         elif act == "hv":
             t = nb.get("test")
@@ -4214,7 +4228,13 @@ def on_nb(call):
             cur = t and t.get("cur")
             if not cur or t.get("fb"):
                 return
-            nb_test_record(uid, t["ids"][t["i"]], False, random.choice(WRONG_SAY))
+            if cur.get("type") == "type" and not cur.get("heard"):      # «Не помню»: сначала аудио, чтобы написать на слух
+                cur["heard"] = True
+                e = next((x for x in nb["items"] if x["id"] == t["ids"][t["i"]]), None)
+                if e:
+                    after_voice = (e["hu"], voice_for(nb_lang(e)))
+            else:
+                nb_test_record(uid, t["ids"][t["i"]], False, random.choice(WRONG_SAY))
             text, kb = nb_test_view(uid)
         elif act == "tm":
             nb["tmode"] = "choice" if (nb.get("tmode") or "type") == "type" else "type"
