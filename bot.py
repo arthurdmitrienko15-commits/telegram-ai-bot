@@ -3262,6 +3262,11 @@ NB_PROMPT = (
     "place заведение, улица, город; song песня, исполнитель или фильм; number число или часть времени; other остальное. "
     "Для глагола в word ставь словарную форму (венгерский: инфинитив на -ni, например futni; английский: to run не нужно, просто run), "
     "а форму из запроса объясни в note. "
+    "Переводи ровно ту форму, что написана: единственное число переводи единственным, множественное множественным, не меняй число и время. "
+    "Если у слова несколько частых значений, дай до трёх через запятую, самое частое первым. "
+    "Если слово бывает разными частями речи, в ru напиши каждую отдельно через точку с запятой с пометкой: "
+    "«гл. обращаться, относиться; сущ. угощение, лакомство» (пометки: гл., сущ., прил., нареч., предл., союз, межд.). "
+    "В note пиши только то, в чём уверен (часть речи, форма, нюанс употребления), ничего не угадывай. "
     "Не выдумывай: если не уверен, так и скажи в note. Если это не слово и не фраза, верни pos other, word и ru пустые."
 )
 
@@ -3399,7 +3404,7 @@ def nb_parse(raw):
     return out
 
 
-def nb_analyze(text, prefer=None, force=None):
+def nb_analyze(text, prefer=None, force=None, recheck=None, skip=0):
     """Разбор записи через ИИ. Причина неудачи запоминается, чтобы её было видно в карточке."""
     if not client:
         _nb_err["msg"] = "боту не передан ключ GROQ_API_KEY (или не установлена библиотека groq)"
@@ -3411,8 +3416,16 @@ def nb_analyze(text, prefer=None, force=None):
     elif prefer:
         sysmsg += (f" Если слово написано латиницей и может быть словом нескольких языков (например so, hat, van), "
                    f"считай его словом языка «{prefer}», если оно там существует; пропущенные диакритики исправь (so → só).")
+    if recheck:
+        sysmsg += (f" ВАЖНО: пользователь сомневается в переводе «{recheck}». Проверь внимательно и дай самый точный и частотный перевод; "
+                   f"если слово бывает разными частями речи, напиши каждую отдельно с пометкой: «гл. …; сущ. …»; "
+                   f"внутри части речи перечисли до трёх главных значений через запятую, главное первым.")
     msgs = [{"role": "system", "content": sysmsg}, {"role": "user", "content": text[:300]}]
-    for model in NB_MODELS:
+    models = list(NB_MODELS)
+    if skip and models:
+        skip %= len(models)
+        models = models[skip:] + models[:skip]
+    for model in models:
         for kw in ({"response_format": {"type": "json_object"}}, {}):
             kw = dict(kw)
             if model.startswith("openai/gpt-oss"):
@@ -3496,7 +3509,7 @@ def nb_detail_view(uid, eid, li=-1, page=0):
         return nb_home_view(uid)
     forms = nb_forms(e)
     lines = [_md(f"{nb_flag(nb_lang(e))} {nb_lang(e)}"), "", "*" + _md(e["hu"]) + "*"]
-    lines.append(f"||{_md(e['ru'])}||" if e["ru"] else _md("…"))
+    lines.append(nb_ru_md(e["ru"]) if e["ru"] else _md("…"))
     if forms:
         lines += ["", _md("Варианты:")] + [f"• {_md(f['t'])} — " + (f"||{_md(f['ru'])}||" if f["ru"] else "…") for f in forms]
     else:
@@ -3506,8 +3519,9 @@ def nb_detail_view(uid, eid, li=-1, page=0):
     kb = InlineKeyboardMarkup()
     kb.row(InlineKeyboardButton("🔊 Слово", callback_data=f"nb:au:{eid}"),
            InlineKeyboardButton("🔊 Варианты", callback_data=f"nb:av:{eid}") if forms else InlineKeyboardButton("📖 Обновить", callback_data=f"nb:o:{eid}:{li}:{page}"))
-    kb.row(InlineKeyboardButton("🌐 Не тот язык", callback_data=f"nb:lg:{eid}"),
-           InlineKeyboardButton("🗑 Удалить", callback_data=f"nb:d:{eid}"))
+    kb.row(InlineKeyboardButton("🔍 Перепроверить", callback_data=f"nb:rc:{eid}"),
+           InlineKeyboardButton("🌐 Не тот язык", callback_data=f"nb:lg:{eid}"))
+    kb.row(InlineKeyboardButton("🗑 Удалить", callback_data=f"nb:d:{eid}"))
     kb.row(InlineKeyboardButton("⬅️ К списку" if li >= 0 else "📚 Тетрадь", callback_data=f"nb:ln:{li}:{page}" if li >= 0 else "nb:f"))
     return "\n".join(lines)[:3800], kb
 
@@ -3554,7 +3568,8 @@ def nb_markup(entry_id=None):
     if entry_id:
         kb.row(InlineKeyboardButton("📖 Варианты", callback_data=f"nb:o:{entry_id}:-1:0"),
                InlineKeyboardButton("🔊 Послушать", callback_data=f"nb:au:{entry_id}"))
-        kb.row(InlineKeyboardButton("🌐 Не тот язык", callback_data=f"nb:lg:{entry_id}"))
+        kb.row(InlineKeyboardButton("🔍 Перепроверить", callback_data=f"nb:rc:{entry_id}"),
+               InlineKeyboardButton("🌐 Не тот язык", callback_data=f"nb:lg:{entry_id}"))
     kb.row(InlineKeyboardButton("📚 Тетрадь", callback_data="nb:f"))
     if entry_id:
         kb.row(InlineKeyboardButton("🗑 Удалить", callback_data=f"nb:d:{entry_id}"))
@@ -3565,10 +3580,19 @@ def nb_line(e):
     return f"• {_md(e['hu'])} — " + (f"||{_md(e['ru'])}||" if e["ru"] else "…")
 
 
+_POS_MARK = re.compile(r";\s*(?=(?:гл|сущ|прил|нареч|предл|союз|межд|мест|числ)\.)")
+
+
+def nb_ru_md(ru):
+    """Перевод под спойлером; если у слова несколько частей речи, каждая на своей строке."""
+    parts = _POS_MARK.split(ru or "")
+    return "\n".join(f"||{_md(p.strip())}||" for p in parts if p.strip())
+
+
 def nb_card(e):
     lines = [_md(("📝 Уже есть в тетради" if e.get("dup") else "📝 Записала") + f" · {nb_flag(nb_lang(e))} {nb_lang(e)}"), "", _md(e["hu"])]
     if e["ru"]:
-        lines.append(f"||{_md(e['ru'])}||")
+        lines.append(nb_ru_md(e["ru"]))
     else:
         lines.append(_md("⚠️ Перевести не вышло: " + (_nb_err["msg"] or "ИИ не ответил") + ". Запись сохранена, попробую ещё раз."))
     if e["note"]:
@@ -3955,6 +3979,18 @@ def on_nb(call):
             except Exception:
                 pass
             text, kb = nb_detail_view(uid, int(p[2]), int(p[3]), int(p[4]))
+        elif act == "rc":
+            e = next((x for x in nb["items"] if x["id"] == int(p[2])), None)
+            if not e:
+                text, kb = nb_home_view(uid)
+            else:
+                e["rc"] = e.get("rc", 0) + 1
+                d = nb_analyze(e.get("src") or e["hu"], force=nb_lang(e), recheck=e.get("ru") or "?", skip=e["rc"])
+                if d and d.get("ru"):
+                    e.update(ru=d["ru"], note=d["note"] or e.get("note", ""), hu=d["hu"] or e["hu"])
+                    e.pop("forms", None)
+                    save_course()
+                text, kb = nb_card(dict(e, dup=False)), nb_markup(e["id"])
         elif act == "av":
             e = next((x for x in nb["items"] if x["id"] == int(p[2])), None)
             if e and e.get("forms"):
