@@ -3794,6 +3794,8 @@ def nb_select_view(uid, li, fi, page):
     if pool:
         kb.row(InlineKeyboardButton("☑️ Все", callback_data=f"nb:a:{li}:{fi}:{page}"),
                InlineKeyboardButton("⬜ Сбросить", callback_data=f"nb:n:{li}:{fi}:{page}"))
+    mode = nb.get("tmode") or "type"
+    kb.row(InlineKeyboardButton("Режим: ✍️ печатать ответ" if mode == "type" else "Режим: 🔘 варианты ответа", callback_data=f"nb:tm:{li}:{fi}:{page}"))
     if k:
         kb.row(InlineKeyboardButton(f"▶️ Начать тест ({k})", callback_data=f"nb:go:{li}:{fi}"))
     kb.row(InlineKeyboardButton("📚 Назад", callback_data="nb:f" if li < 0 else f"nb:l:{li}"))
@@ -3809,11 +3811,73 @@ WRONG_SAY = ["Смелый выбор. Неправильный, но смелы
 OPT_ICONS = ["🟦", "🟥", "🟨", "🟩"]
 
 
+def _acc(x):
+    return "".join(c for c in unicodedata.normalize("NFD", x) if unicodedata.category(c) != "Mn")
+
+
+def _nrm(x):
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", (x or "").lower())).strip()
+
+
+def _lev(a, b):
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def nb_check(ans, target):
+    """ok: точно; almost: верно, но с мелкой ошибкой (ударения, одна буква); bad: неверно."""
+    a, t = _nrm(ans), _nrm(target)
+    if not a:
+        return "bad"
+    if a == t:
+        return "ok"
+    aa, ta = _acc(a), _acc(t)
+    if aa == ta:
+        return "almost"
+    d = _lev(aa, ta)
+    if (len(ta) >= 5 and d == 1) or (len(ta) >= 12 and d == 2):
+        return "almost"
+    return "bad"
+
+
+def nb_hint(target, level):
+    out = []
+    for w in target.split():
+        shown = 0 if level <= 0 else 1 if level == 1 else max(1, (len(w) + 1) // 2)
+        out.append(w[:shown] + "_" * (len(w) - shown))
+    return " ".join(out)
+
+
+def nb_distractors(nb, e, direction, correct, k=3):
+    """Похожие по смыслу и форме неправильные варианты: того же языка и типа, с общими словами и близкой длины."""
+    side = (lambda x: x["ru"]) if direction == "hu" else (lambda x: x["hu"])
+    toks = lambda x: set(re.findall(r"\w+", x.lower()))
+    cands = [x for x in nb["items"] if x["id"] != e["id"] and nb_lang(x) == nb_lang(e) and x.get("ru") and side(x) != correct]
+
+    def score(x):
+        sc = 2 if x.get("pos") == e.get("pos") else 0
+        sc += 3 * len(toks(side(x)) & toks(correct))
+        sc -= abs(len(side(x)) - len(correct)) / 10
+        return sc + random.random()
+
+    out = []
+    for x in sorted(cands, key=score, reverse=True)[:8]:
+        if side(x) not in out:
+            out.append(side(x))
+    random.shuffle(out)
+    return out[:k]
+
+
 def nb_test_start(uid, ids):
     nb = nb_user(uid)
     ids = list(ids)
     random.shuffle(ids)
-    nb["test"] = {"ids": ids, "all": list(ids), "i": 0, "ok": [], "bad": [], "marks": [], "streak": 0}
+    nb["test"] = {"ids": ids, "all": list(ids), "i": 0, "ok": [], "bad": [], "marks": [], "streak": 0, "mode": nb.get("tmode") or "type"}
     save_course()
 
 
@@ -3835,12 +3899,16 @@ def nb_test_view(uid):
         fe = byid.get(fb["id"])
         last = t["i"] >= len(t["ids"])
         lines = [_md(nb_bar(t)), ""]
-        if fb["right"]:
+        if fb["right"] and fb.get("kind") == "almost":
+            lines.append(_md("🟩 Почти! Засчитала, но проверь написание."))
+        elif fb["right"]:
             lines.append(_md("🟩 Верно! " + fb["say"]))
             if t.get("streak", 0) >= 3:
                 lines.append(_md(f"🔥 Серия: {t['streak']}"))
         else:
             lines.append(_md("🟥 Не то. " + fb["say"]))
+        if fb.get("ans"):
+            lines.append(_md(f"Твой ответ: {fb['ans']}"))
         if fe:
             lines += ["", _md(f"{nb_flag(nb_lang(fe))} {fe['hu']} — {fe['ru']}")]
             if fe.get("note"):
@@ -3871,18 +3939,23 @@ def nb_test_view(uid):
         return "\n".join(lines)[:3500], kb
     e = byid[t["ids"][t["i"]]]
     n = len(t["ids"])
-    direction = random.choice(("hu", "ru"))            # слово → перевод или перевод → слово
-    shown, correct = (e["hu"], e["ru"]) if direction == "hu" else (e["ru"], e["hu"])
-    pool = [x for x in nb["items"] if x["id"] != e["id"] and nb_lang(x) == nb_lang(e) and x.get("ru")]
-    wrong = []
-    for x in random.sample(pool, len(pool)):
-        cand = x["ru"] if direction == "hu" else x["hu"]
-        if cand != correct and cand not in wrong:
-            wrong.append(cand)
-        if len(wrong) == 3:
-            break
     kb = InlineKeyboardMarkup()
     head = [_md(nb_bar(t)), _md(f"Вопрос {t['i'] + 1} из {n}" + (f" · 🔥 {t['streak']}" if t.get("streak", 0) >= 3 else "")), ""]
+    if (t.get("mode") or "type") == "type":
+        cur = t.get("cur")
+        if not (cur and cur.get("type") == "type" and cur.get("i") == t["i"]):
+            cur = {"type": "type", "i": t["i"], "hint": 0}
+            t["cur"] = cur
+        words = len(e["hu"].split())
+        hint = nb_hint(e["hu"], cur["hint"]) if cur["hint"] else f"слов: {words}, букв: {len(re.sub(r'[^\w]', '', e['hu']))}"
+        lines = head + [_md(e["ru"]), "", _md(f"Напиши это на языке: {nb_flag(nb_lang(e))} {nb_lang(e)}"), _md("(просто отправь сообщением)"), "", _md("💡 " + hint)]
+        kb.row(InlineKeyboardButton("💡 Подсказка", callback_data="nb:hn"), InlineKeyboardButton("🤷 Не помню", callback_data="nb:dk"))
+        kb.row(InlineKeyboardButton("⏹ Закончить", callback_data="nb:e"))
+        save_course()
+        return "\n".join(lines), kb
+    direction = random.choice(("hu", "ru"))            # слово → перевод или перевод → слово
+    shown, correct = (e["hu"], e["ru"]) if direction == "hu" else (e["ru"], e["hu"])
+    wrong = nb_distractors(nb, e, direction, correct)
     if len(wrong) >= 2:
         opts = wrong + [correct]
         random.shuffle(opts)
@@ -3898,6 +3971,37 @@ def nb_test_view(uid):
     kb.row(InlineKeyboardButton("⏹ Закончить", callback_data="nb:e"))
     save_course()
     return "\n".join(lines), kb
+
+
+def nb_test_typed(uid, chat_id, text):
+    """Если идёт тест в режиме «печатать», текст пользователя это ответ. True, если ответ принят."""
+    u = U(uid)
+    nb = u.get("nb") or {}
+    t = nb.get("test")
+    cur = t and t.get("cur")
+    if not t or not cur or cur.get("type") != "type" or t.get("fb") or t["i"] >= len(t["ids"]):
+        return False
+    e = next((x for x in nb["items"] if x["id"] == t["ids"][t["i"]]), None)
+    if not e:
+        return False
+    kind = nb_check(text, e["hu"])
+    right = kind != "bad"
+    nb_test_record(uid, e["id"], right, random.choice(RIGHT_SAY if right else WRONG_SAY), ans=text[:80], kind=kind)
+    body, kb = nb_test_view(uid)
+    nb_sweep(chat_id, None)
+    nb_show(chat_id, body, kb)
+    return True
+
+
+def nb_test_record(uid, eid, right, say, ans=None, kind=None):
+    t = nb_user(uid)["test"]
+    (t["ok"] if right else t["bad"]).append(eid)
+    t["marks"].append("🟩" if right else "🟥")
+    t["streak"] = t.get("streak", 0) + 1 if right else 0
+    t["fb"] = {"id": eid, "right": right, "say": say, "ans": ans if not right else None, "kind": kind}
+    t["cur"] = None
+    t["i"] += 1
+    save_course()
 
 
 def _store_id_reply(m):
@@ -4079,6 +4183,23 @@ def on_nb(call):
                 return
             nb_test_start(uid, ids)
             text, kb = nb_test_view(uid)
+        elif act == "hn":
+            t = nb.get("test")
+            cur = t and t.get("cur")
+            if cur and cur.get("type") == "type" and not t.get("fb"):
+                cur["hint"] = min(cur.get("hint", 0) + 1, 2)
+            text, kb = nb_test_view(uid)
+        elif act == "dk":
+            t = nb.get("test")
+            cur = t and t.get("cur")
+            if not cur or t.get("fb"):
+                return
+            nb_test_record(uid, t["ids"][t["i"]], False, random.choice(WRONG_SAY))
+            text, kb = nb_test_view(uid)
+        elif act == "tm":
+            nb["tmode"] = "choice" if (nb.get("tmode") or "type") == "type" else "type"
+            save_course()
+            text, kb = nb_select_view(uid, int(p[2]), int(p[3]), int(p[4]))
         elif act == "m":
             t = nb.get("test")
             cur = t and t.get("cur")
@@ -4937,6 +5058,8 @@ def handle_all_messages(message):
     if NB_ON and "verb" not in data:
         if text.startswith("/"):
             nb_next(user_id, message.chat.id)          # любая старая команда ведёт в тетрадь
+        elif nb_test_typed(user_id, message.chat.id, text):
+            pass                                        # идёт тест: текст это ответ, а не новая запись
         else:
             nb_add(user_id, message.chat.id, text, message.message_id)
         return
