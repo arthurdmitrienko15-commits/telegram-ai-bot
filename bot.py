@@ -3914,7 +3914,9 @@ def nb_test_view(uid):
         fe = byid.get(fb["id"])
         last = t["i"] >= len(t["ids"])
         lines = [_md(nb_bar(t)), ""]
-        if fb["right"] and fb.get("kind") == "almost":
+        if fb["right"] and fb.get("kind") == "synonym":
+            lines.append(_md("🟩 Тоже подходит! Засчитала. В тетради записано иначе, смотри ниже."))
+        elif fb["right"] and fb.get("kind") == "almost":
             lines.append(_md("🟩 Почти! Засчитала, но проверь написание."))
         elif fb["right"]:
             lines.append(_md("🟩 Верно! " + fb["say"]))
@@ -3999,6 +4001,22 @@ def nb_test_view(uid):
     return "\n".join(lines), kb
 
 
+def nb_synonym_ok(ans, e):
+    """Ответ не совпал со словом из тетради: проверяем, не является ли он тоже верным переводом (синоним)."""
+    if not client or len(ans.split()) > 6:
+        return False
+    msgs = [{"role": "system", "content": "Ты строгий проверяющий переводов. Ответь одним словом: ДА, если слово или фраза на языке «%s» является точным переводом русского значения (допустим синоним), иначе НЕТ." % nb_lang(e)},
+            {"role": "user", "content": f"Русское значение: {e['ru']}\nОтвет ученика: {ans}"}]
+    for model in NB_MODELS[:2]:
+        kw = {"extra_body": {"reasoning_effort": "low"}} if model.startswith("openai/gpt-oss") else {}
+        try:
+            done = client.chat.completions.create(model=model, temperature=0, max_tokens=300, messages=msgs, **kw)
+            return (done.choices[0].message.content or "").strip().upper().startswith("ДА")
+        except Exception as ex:
+            print(f"synonym check ({model}): {ex}")
+    return False
+
+
 def nb_test_typed(uid, chat_id, text):
     """Если идёт тест в режиме «печатать», текст пользователя это ответ. True, если ответ принят."""
     u = U(uid)
@@ -4011,6 +4029,8 @@ def nb_test_typed(uid, chat_id, text):
     if not e:
         return False
     kind = nb_check(text, e["hu"])
+    if kind == "bad" and nb_synonym_ok(text, e):
+        kind = "synonym"
     right = kind != "bad"
     nb_test_record(uid, e["id"], right, random.choice(RIGHT_SAY if right else WRONG_SAY), ans=text[:80], kind=kind)
     body, kb = nb_test_view(uid)
@@ -4118,7 +4138,8 @@ def on_nb(call):
                 e["rc"] = e.get("rc", 0) + 1
                 d = nb_analyze(e.get("src") or e["hu"], force=nb_lang(e), recheck=e.get("ru") or "?", skip=e["rc"])
                 if d and d.get("ru"):
-                    e.update(ru=d["ru"], note=d["note"] or e.get("note", ""), hu=d["hu"] or e["hu"])
+                    same = d["hu"] and nb_check(d["hu"], e["hu"]) != "bad"     # слово не подменяем другим: только поправка написания
+                    e.update(ru=d["ru"], note=(d["note"] or e.get("note", "")) if same else e.get("note", ""), hu=d["hu"] if same else e["hu"])
                     e.pop("forms", None)
                     save_course()
                 text, kb = nb_card(dict(e, dup=False)), nb_markup(e["id"])
