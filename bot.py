@@ -3320,6 +3320,8 @@ def nb_sweep(chat_id, upto_mid):
 def nb_show(chat_id, body, kb=None):
     """Единственное сообщение в чате: правим его на месте, новое шлём только если править нечего. body в MarkdownV2."""
     u = U(chat_id)
+    if u.get("nb") is not None:
+        u["nb"]["shown_at"] = time.time()
     full = body if NB_IMAGE else _md(nb_header(chat_id)) + "\n\n" + body
     mine = [e for e in u["trail"] if e[2] not in ("user", "voice")]
     if mine and mine[-1][2] == "screen" and not NB_IMAGE:
@@ -3618,6 +3620,11 @@ def nb_add(uid, chat_id, text, mid=None):
     nb_show(chat_id, "\n".join(lines), nb_markup())
 
 
+def nb_push_btn(nb):
+    on = nb.get("push") is not False
+    return InlineKeyboardButton("🔔 Слово каждый час: вкл" if on else "🔕 Слово каждый час: выкл", callback_data="nb:pz")
+
+
 def nb_home_view(uid):
     nb = nb_user(uid)
     langs = [l for l in nb["langs"] if any(nb_lang(e) == l for e in nb["items"])]
@@ -3630,6 +3637,7 @@ def nb_home_view(uid):
         n = len([e for e in nb["items"] if nb_lang(e) == l])
         kb.row(InlineKeyboardButton(f"{nb_flag(l)} {l} · {n}", callback_data=f"nb:l:{nb['langs'].index(l)}"))
     kb.row(InlineKeyboardButton("🧪 Тест", callback_data="nb:s:-1:-1"))
+    kb.row(nb_push_btn(nb))
     return _md("📚 Твоя тетрадь. Выбери язык."), kb
 
 
@@ -3677,6 +3685,7 @@ def nb_list_view(uid, li, page=0, delete=False, single=False):
                InlineKeyboardButton("🗑 Удалить", callback_data=f"nb:lz:{li}:{page}"))
     if not single and len(nb["langs"]) > 1:
         kb.row(InlineKeyboardButton("⬅️ Языки", callback_data="nb:f"))
+    kb.row(nb_push_btn(nb))
     return text, kb
 
 
@@ -4151,6 +4160,11 @@ def on_nb(call):
                 if not send_speech(chat, ". ".join(f["t"] for f in e["forms"]), voice_for(nb_lang(e))):
                     bot.answer_callback_query(call.id, "Не получилось озвучить, попробуй позже")
             return
+        elif act == "pz":
+            nb["push"] = nb.get("push") is False
+            save_course()
+            bot.answer_callback_query(call.id, "Слово каждый час: включено" if nb["push"] else "Напоминания выключены")
+            text, kb = nb_home_view(uid)
         elif act == "au":
             e = next((x for x in nb["items"] if x["id"] == int(p[2])), None)
             if e and e.get("hu"):
@@ -4346,10 +4360,54 @@ def nb_fill_pending(uid, limit=3):
         save_course()
 
 
+def _push_hours():
+    try:
+        a, b = os.getenv("NB_PUSH_HOURS", "9-21").split("-")
+        return int(a), int(b)
+    except Exception:
+        return 9, 21
+
+
+def nb_push_view(uid, e):
+    nb = nb_user(uid)
+    li = nb["langs"].index(nb_lang(e)) if nb_lang(e) in nb["langs"] else 0
+    lines = [_md("🔔 Слово из тетради"), "", _md(f"{nb_flag(nb_lang(e))} {e['hu']}"), nb_ru_md(e["ru"])]
+    kb = InlineKeyboardMarkup()
+    kb.row(InlineKeyboardButton("🔊 Послушать", callback_data=f"nb:au:{e['id']}"),
+           InlineKeyboardButton("📖 Подробнее", callback_data=f"nb:o:{e['id']}:{li}:0"))
+    kb.row(InlineKeyboardButton("📚 Тетрадь", callback_data="nb:f"),
+           InlineKeyboardButton("🔕 Выключить", callback_data="nb:pz"))
+    return "\n".join(lines), kb
+
+
+def nb_push(uid, now):
+    """Раз в час (с 9 до 21 по Будапешту) присылает слово из тетради: то, что показывали давнее всех. Не мешает тесту и свежему диалогу."""
+    nb = U(uid).get("nb")
+    if not nb or nb.get("push") is False or not nb.get("items"):
+        return
+    a, b = _push_hours()
+    key = f"{now.date()}-{now.hour}"
+    if not (a <= now.hour <= b) or nb.get("push_h") == key:
+        return
+    if nb.get("test") or time.time() - nb.get("shown_at", 0) < 300:
+        return
+    pool = [e for e in nb["items"] if e.get("ru") and e.get("hu")]
+    if not pool:
+        return
+    pool.sort(key=lambda e: e.get("ps", 0))
+    e = random.choice(pool[:5])
+    nb["push_h"] = key
+    e["ps"] = time.time()
+    body, kb = nb_push_view(uid, e)
+    nb_show(uid, body, kb)
+    save_course()
+
+
 def nb_tick(uid, now):
-    """Сама ничего не шлёт: только дозаполняет и раскладывает записи."""
+    """Дозаполняет и раскладывает записи, раз в час шлёт слово из тетради."""
     if U(uid).get("nb"):
         nb_fill_pending(uid)
+        nb_push(uid, now)
 
 
 def send_stage(uid):
