@@ -3317,12 +3317,12 @@ def nb_sweep(chat_id, upto_mid):
     threading.Thread(target=run, daemon=True).start()
 
 
-def nb_show(chat_id, body, kb=None):
+def nb_show(chat_id, body, kb=None, header=True):
     """Единственное сообщение в чате: правим его на месте, новое шлём только если править нечего. body в MarkdownV2."""
     u = U(chat_id)
     if u.get("nb") is not None:
         u["nb"]["shown_at"] = time.time()
-    full = body if NB_IMAGE else _md(nb_header(chat_id)) + "\n\n" + body
+    full = body if (NB_IMAGE or not header) else _md(nb_header(chat_id)) + "\n\n" + body
     mine = [e for e in u["trail"] if e[2] not in ("user", "voice")]
     if mine and mine[-1][2] == "screen" and not NB_IMAGE:
         mine = []                                   # старое сообщение с картинкой: заменяем текстовым, а не правим
@@ -4371,7 +4371,7 @@ def _push_hours():
 def nb_push_view(uid, e):
     nb = nb_user(uid)
     li = nb["langs"].index(nb_lang(e)) if nb_lang(e) in nb["langs"] else 0
-    lines = [_md("🔔 Слово из тетради"), "", _md(f"{nb_flag(nb_lang(e))} {e['hu']}"), nb_ru_md(e["ru"])]
+    lines = [_md(f"{nb_flag(nb_lang(e))} {e['hu']}"), nb_ru_md(e["ru"]), "", _md("🔔 Слово из тетради")]      # слово первым: его видно в уведомлении
     kb = InlineKeyboardMarkup()
     kb.row(InlineKeyboardButton("🔊 Послушать", callback_data=f"nb:au:{e['id']}"),
            InlineKeyboardButton("📖 Подробнее", callback_data=f"nb:o:{e['id']}:{li}:0"))
@@ -4402,7 +4402,7 @@ def nb_push(uid, now):
     e["ps"] = time.time()
     body, kb = nb_push_view(uid, e)
     print(f"[слово часа] {uid}: {e['hu']}")
-    nb_show(uid, body, kb)
+    nb_show(uid, body, kb, header=False)
     save_course()
 
 
