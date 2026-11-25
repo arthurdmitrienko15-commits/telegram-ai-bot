@@ -4389,8 +4389,10 @@ def nb_push(uid, now):
     key = f"{now.date()}-{now.hour}"
     if not (a <= now.hour <= b) or nb.get("push_h") == key:
         return
-    if nb.get("test") or time.time() - nb.get("shown_at", 0) < 300:
+    idle = time.time() - nb.get("shown_at", 0)
+    if idle < 300 or (nb.get("test") and idle < 1800):     # недоделанный тест старше получаса не считается
         return
+    nb["test"] = None
     pool = [e for e in nb["items"] if e.get("ru") and e.get("hu")]
     if not pool:
         return
@@ -4399,6 +4401,7 @@ def nb_push(uid, now):
     nb["push_h"] = key
     e["ps"] = time.time()
     body, kb = nb_push_view(uid, e)
+    print(f"[слово часа] {uid}: {e['hu']}")
     nb_show(uid, body, kb)
     save_course()
 
@@ -5114,7 +5117,13 @@ def tick_user(uid, now):
 
 def scheduler_tick(now):
     tidy_sweep_voices()
-    for uid in list(all_users):
+    known = set(all_users)
+    for k in list(_store):                      # users.json мог пропасть при редеплое: берём ещё и тех, у кого есть тетрадь
+        try:
+            known.add(int(k))
+        except ValueError:
+            pass
+    for uid in sorted(known):
         try:
             tick_user(uid, now)
         except Exception as e:
