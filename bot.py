@@ -3267,7 +3267,9 @@ NB_PROMPT = (
     "Если слово бывает разными частями речи, в ru напиши каждую отдельно через точку с запятой с пометкой: "
     "«гл. обращаться, относиться; сущ. угощение, лакомство» (пометки: гл., сущ., прил., нареч., предл., союз, межд.). "
     "Фразовые глаголы и устойчивые выражения переводи как единое целое, а не по словам: put up with значит терпеть, give up бросить, "
-    "look after присматривать; не отбрасывай частицы и предлоги из записи и не обрезай фразу. "
+    "look after присматривать, get to me задевать (его) или доставать, come across наткнуться; не отбрасывай частицы и предлоги из записи и не обрезай фразу. "
+    "Для фраз и разговорных выражений сначала определи, нет ли тут идиомы или фразового глагола, и переведи смысл так, как сказал бы носитель русского, "
+    "а не дословно по словам: «will always get to me» значит «всегда будет меня задевать», а не «обращаться ко мне». "
     "В note пиши только то, в чём уверен (часть речи, форма, нюанс употребления), ничего не угадывай. "
     "Не выдумывай: если не уверен, так и скажи в note. Если это не слово и не фраза, верни pos other, word и ru пустые."
 )
@@ -3433,9 +3435,9 @@ def nb_analyze(text, prefer=None, force=None, recheck=None, skip=0):
         for kw in ({"response_format": {"type": "json_object"}}, {}):
             kw = dict(kw)
             if model.startswith("openai/gpt-oss"):
-                kw["extra_body"] = {"reasoning_effort": "low"}
+                kw["extra_body"] = {"reasoning_effort": "medium" if len(text.split()) >= 2 else "low"}   # фразы и идиомы требуют больше раздумий
             try:
-                done = client.chat.completions.create(model=model, temperature=0.2, max_tokens=1500, messages=msgs, **kw)
+                done = client.chat.completions.create(model=model, temperature=0.2, max_tokens=2500, messages=msgs, **kw)
                 d = nb_parse(done.choices[0].message.content)
                 if d is not None:
                     if force:
